@@ -1,0 +1,44 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# --- 虚拟环境 ---
+venv/
+env/
+.venv/
+ENV/
+
+# --- 敏感信息 ---
+.env
+.env.local
+*.pem
+*.key
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- 构建产物 ---
+build/
+dist/
+*.egg-info/
+*.egg
+
+# --- 测试与覆盖率 ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- 日志 ---
+*.log
+logs/
+
+# --- 操作系统 ---
+.DS_Store
+Thumbs.db
