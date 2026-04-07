@@ -12,7 +12,7 @@ def get_llm():
         api_key=os.getenv("LLM_API_KEY"),
         base_url=os.getenv("LLM_BASE_URL"),
         timeout=int(os.getenv("LLM_TIMEOUT", 60)),
-        temperature=0.1
+        temperature=1
     )
 
 
