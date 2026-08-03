@@ -1,7 +1,30 @@
 import json
 from .base import BaseAgent
 from ..prompts.agent_prompts import PLANNER_AGENT_PROMPT
-from ..schemas.trip_schema import TripRequest
+from pydantic import ValidationError
+
+from ..schemas.trip_schema import TripPlan, TripRequest
+
+
+def _extract_json_object(response: str) -> dict:
+    """Extract the first complete JSON object from a model response."""
+    cleaned = response.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[len("```json"):].strip()
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:].strip()
+
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3].strip()
+
+    object_start = cleaned.find("{")
+    if object_start < 0:
+        raise ValueError("Model response does not contain a JSON object")
+
+    value, _ = json.JSONDecoder().raw_decode(cleaned[object_start:])
+    if not isinstance(value, dict):
+        raise ValueError("Trip plan JSON must be an object")
+    return value
 
 
 class PlannerAgent(BaseAgent):
@@ -32,17 +55,16 @@ class PlannerAgent(BaseAgent):
         response = self.invoke(input_info)
 
         try:
-            # 暴力清洗，确保能转JSON
-            response = response.strip()
-            if "```json" in response:
-                response = response.split("```json")[1].split("```")[0].strip()
-            if "```" in response:
-                response = response.replace("```", "").strip()
+            parsed = _extract_json_object(response)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(
+                "Trip plan JSON parsing failed. The model output may be truncated "
+                f"or malformed: {exc}"
+            ) from exc
 
-            return json.loads(response)
-        except Exception as e:
-            return {
-                "error": "行程解析失败",
-                "reason": str(e),
-                "raw": response[:500]
-            }
+        try:
+            return TripPlan.model_validate(parsed).model_dump()
+        except ValidationError as exc:
+            raise ValueError(
+                f"Trip plan structure validation failed: {exc}"
+            ) from exc
