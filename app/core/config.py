@@ -13,6 +13,13 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     return value.strip().strip("\"").strip("'")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = _env(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
 class Settings:
     # LLM protocol: responses (OpenAI Responses API) or anthropic (Messages API)
     LLM_PROTOCOL: str = (_env("LLM_PROTOCOL", "responses") or "responses").lower()
@@ -41,9 +48,76 @@ class Settings:
         "CLAUDE_LLM_BASE_URL", "https://api.anthropic.com"
     ) or "https://api.anthropic.com"
     CLAUDE_LLM_MAX_TOKENS: int = int(
-        _env("CLAUDE_LLM_MAX_TOKENS", "128000") or "128000"
+        _env("CLAUDE_LLM_MAX_TOKENS", "16384") or "16384"
     )
 
+    # Persistent AgentState checkpoints and bounded deterministic loop.
+    AGENT_MEMORY_DB_PATH: str = _env(
+        "AGENT_MEMORY_DB_PATH", "data/agent_memory.db"
+    ) or "data/agent_memory.db"
+    AGENT_MAX_STEPS: int = int(_env("AGENT_MAX_STEPS", "16") or "16")
+    AGENT_MAX_ATTEMPTS_PER_ACTION: int = int(
+        _env("AGENT_MAX_ATTEMPTS_PER_ACTION", "2") or "2"
+    )
+    AGENT_MAX_REPAIR_ATTEMPTS: int = int(
+        _env("AGENT_MAX_REPAIR_ATTEMPTS", "2") or "2"
+    )
+
+    AGENT_MAX_DURATION_SECONDS: float = float(
+        _env("AGENT_MAX_DURATION_SECONDS", "180") or "180"
+    )
+    AGENT_MAX_TOOL_CALLS: int = int(
+        _env("AGENT_MAX_TOOL_CALLS", "15") or "15"
+    )
+    AGENT_MAX_LLM_CALLS: int = int(
+        _env("AGENT_MAX_LLM_CALLS", "6") or "6"
+    )
+    AGENT_RETRY_BASE_DELAY_SECONDS: float = float(
+        _env("AGENT_RETRY_BASE_DELAY_SECONDS", "0.5") or "0.5"
+    )
+    AGENT_RETRY_MAX_DELAY_SECONDS: float = float(
+        _env("AGENT_RETRY_MAX_DELAY_SECONDS", "8") or "8"
+    )
+    AGENT_RETRY_JITTER_SECONDS: float = float(
+        _env("AGENT_RETRY_JITTER_SECONDS", "0.25") or "0.25"
+    )
+    AGENT_CIRCUIT_FAILURE_THRESHOLD: int = int(
+        _env("AGENT_CIRCUIT_FAILURE_THRESHOLD", "3") or "3"
+    )
+    AGENT_CIRCUIT_RECOVERY_TIMEOUT_SECONDS: float = float(
+        _env("AGENT_CIRCUIT_RECOVERY_TIMEOUT_SECONDS", "30") or "30"
+    )
+
+    # Amap HTTP timeouts (connect timeout, read timeout).
+    AMAP_HTTP_CONNECT_TIMEOUT: float = float(
+        _env("AMAP_HTTP_CONNECT_TIMEOUT", "3.05") or "3.05"
+    )
+    AMAP_HTTP_READ_TIMEOUT: float = float(
+        _env("AMAP_HTTP_READ_TIMEOUT", "10") or "10"
+    )
+    # Standardized provider output limits. Invalid and duplicate rows are removed
+    # before these limits are applied.
+    AMAP_MAX_ATTRACTION_CANDIDATES: int = int(
+        _env("AMAP_MAX_ATTRACTION_CANDIDATES", "8") or "8"
+    )
+    AMAP_MAX_HOTEL_CANDIDATES: int = int(
+        _env("AMAP_MAX_HOTEL_CANDIDATES", "6") or "6"
+    )
+    AMAP_MAX_WEATHER_DAYS: int = int(
+        _env("AMAP_MAX_WEATHER_DAYS", "7") or "7"
+    )
+    AMAP_MAX_ROUTE_LEGS: int = int(
+        _env("AMAP_MAX_ROUTE_LEGS", "12") or "12"
+    )
+    AMAP_ROUTE_CACHE_ENABLED: bool = _env_bool(
+        "AMAP_ROUTE_CACHE_ENABLED", True
+    )
+    AMAP_ROUTE_CACHE_TTL_SECONDS: int = int(
+        _env("AMAP_ROUTE_CACHE_TTL_SECONDS", "3600") or "3600"
+    )
+    AMAP_ROUTE_UNAVAILABLE_CACHE_TTL_SECONDS: int = int(
+        _env("AMAP_ROUTE_UNAVAILABLE_CACHE_TTL_SECONDS", "300") or "300"
+    )
     # Amap
     AMAP_API_KEY: Optional[str] = _env("AMAP_API_KEY")
 

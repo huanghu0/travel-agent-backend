@@ -155,6 +155,8 @@ class TripPlanResponse(BaseModel):
     success: bool = Field(..., description="是否成功")
     message: str = Field(default="", description="消息")
     data: Optional[TripPlan] = Field(default=None, description="旅行计划数据")
+    session_id: Optional[str] = Field(default=None, description="可查询和恢复的会话ID")
+    execution_steps: Optional[int] = Field(default=None, description="已执行步骤数")
 
 
 class POIInfo(BaseModel):

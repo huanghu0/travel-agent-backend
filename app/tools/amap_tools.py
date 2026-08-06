@@ -1,55 +1,80 @@
-import os
+"""兼容旧 Agent 的高德工具入口。
+
+生产链路使用 app.providers.amap.AmapProviderClient。这里保留 AmapTools 和
+parse_tool_call，避免旧 Agent/外部导入立即失效。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
 import requests
-from dotenv import load_dotenv
-from typing import Dict, Any
 
-load_dotenv()
-AMAP_KEY = os.getenv("AMAP_API_KEY")
+from app.providers.amap.client import AmapClient
+from app.providers.amap.errors import AmapProviderError
+from app.tools.models import ToolErrorType
+from app.tools.registry import ToolResultError
 
 
-class AmapTools:
-    """高德地图API工具类"""
-
-    @staticmethod
-    def text_search(keywords: str, city: str) -> Dict[str, Any]:
-        """文本搜索（景点/酒店）"""
-        url = "https://restapi.amap.com/v3/place/text"
-        params = {
-            "key": AMAP_KEY,
-            "keywords": keywords,
-            "city": city,
-            "output": "json",
-            "page_size": 10
-        }
-        response = requests.get(url, params=params)
-        return response.json()
+class AmapTools(AmapClient):
+    """旧接口兼容层：保持返回高德原始 JSON 和 ToolResultError 语义。"""
 
     @staticmethod
-    def get_weather(city: str) -> Dict[str, Any]:
-        """查询城市天气"""
-        url = "https://restapi.amap.com/v3/weather/weatherInfo"
-        params = {
-            "key": AMAP_KEY,
-            "city": city,
-            "output": "json",
-            "extensions": "all"  # 获取预报天气
-        }
-        response = requests.get(url, params=params)
-        return response.json()
+    def http_get(*args: Any, **kwargs: Any) -> Any:
+        # 间接调用模块属性，使现有测试和调用方仍可 patch requests.get。
+        return requests.get(*args, **kwargs)
+
+    @classmethod
+    def text_search(cls, keywords: str, city: str) -> dict[str, Any]:
+        """保留旧版可使用位置参数的调用签名。"""
+        return super().text_search(keywords=keywords, city=city)
 
 
-# 工具调用解析函数（解析智能体返回的工具指令）
+    @classmethod
+    def _get_json(cls, url: str, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return super()._get_json(url, params)
+        except AmapProviderError as exc:
+            raise ToolResultError(
+                str(exc),
+                error_type=ToolErrorType(exc.kind.value),
+                retryable=exc.retryable,
+                provider_code=exc.provider_code,
+                provider_message=exc.provider_message,
+            ) from exc
+
+
+# Tool-call parser used only by the retired prompt-driven map agents.
 def parse_tool_call(response: str):
-    """解析智能体返回的工具调用指令"""
+    """Parse Anthropic native tool calls or the legacy text instruction."""
+    import json
     import re
+
+    aliases = {
+        "maps_text_search": "amap_maps_text_search",
+        "maps_weather": "amap_maps_weather",
+    }
+
+    try:
+        payload = json.loads(response.strip())
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        payload = None
+
+    if isinstance(payload, dict) and payload.get("type") == "tool_call":
+        tool_name = payload.get("name")
+        params = payload.get("input")
+        if isinstance(tool_name, str) and isinstance(params, dict):
+            return aliases.get(tool_name, tool_name), params
+
     pattern = r"\[TOOL_CALL:(.*?):(.*?)\]"
     match = re.search(pattern, response)
     if match:
-        tool_name = match.group(1)
-        params_str = match.group(2)
+        tool_name = aliases.get(match.group(1), match.group(1))
         params = {}
-        for param in params_str.split(","):
-            k, v = param.split("=")
-            params[k.strip()] = v.strip()
+        for param in match.group(2).split(","):
+            if "=" not in param:
+                continue
+            key, value = param.split("=", 1)
+            params[key.strip()] = value.strip()
         return tool_name, params
     return None, None

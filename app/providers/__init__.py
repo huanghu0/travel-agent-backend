@@ -1,0 +1,1 @@
+﻿"""External service provider adapters."""

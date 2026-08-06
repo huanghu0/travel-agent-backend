@@ -1,13 +1,16 @@
 import json
-from .base import BaseAgent
-from ..prompts.agent_prompts import PLANNER_AGENT_PROMPT
+
 from pydantic import ValidationError
 
+from .base import BaseAgent
+from ..prompts.agent_prompts import PLANNER_AGENT_PROMPT
 from ..schemas.trip_schema import TripPlan, TripRequest
+from ..validation import TripValidationResult
 
 
 def _extract_json_object(response: str) -> dict:
-    """Extract the first complete JSON object from a model response."""
+    """从模型文本中提取第一个完整 JSON 对象，并兼容 Markdown 代码块。"""
+    # 步骤 1：去掉模型偶尔附加的 Markdown 围栏。
     cleaned = response.strip()
     if cleaned.startswith("```json"):
         cleaned = cleaned[len("```json"):].strip()
@@ -17,6 +20,7 @@ def _extract_json_object(response: str) -> dict:
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3].strip()
 
+    # 步骤 2：从第一个左花括号开始解析，忽略 JSON 前的少量说明文字。
     object_start = cleaned.find("{")
     if object_start < 0:
         raise ValueError("Model response does not contain a JSON object")
@@ -27,44 +31,107 @@ def _extract_json_object(response: str) -> dict:
     return value
 
 
+def _parse_trip_plan_response(response: str) -> dict:
+    # 步骤 1：先完成语法级 JSON 提取。
+    try:
+        parsed = _extract_json_object(response)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(
+            "Trip plan JSON parsing failed. The model output may be truncated "
+            f"or malformed: {exc}"
+        ) from exc
+
+    # 步骤 2：再使用 TripPlan 做结构校验，缺字段时给出顶层键诊断。
+    try:
+        return TripPlan.model_validate(parsed).model_dump()
+    except ValidationError as exc:
+        returned_keys = ", ".join(sorted(parsed.keys())) or "none"
+        raise ValueError(
+            "Trip plan structure validation failed "
+            f"(returned top-level keys: {returned_keys}): {exc}"
+        ) from exc
+
+
 class PlannerAgent(BaseAgent):
     def __init__(self):
         super().__init__(PLANNER_AGENT_PROMPT)
 
-    def generate_plan(self, request: TripRequest, attractions: dict, weather: dict, hotels: dict) -> dict:
+    def generate_plan(
+        self,
+        request: TripRequest,
+        attractions: dict,
+        weather: dict,
+        hotels: dict,
+    ) -> dict:
+        # 步骤 1：把用户请求和三类可信工具数据一起提供给规划模型。
         input_info = f"""
-        你是专业旅行规划师，根据以下信息生成旅行计划。
-        必须严格返回JSON，不要返回任何多余文字、解释、markdown。
-        返回格式必须是标准JSON，不能有任何注释。
+        你是专业旅行规划师，请根据以下数据生成旅行计划。
 
         用户请求：
         {request.model_dump_json()}
 
-        景点信息：
+        景点信息（已过滤、去重、排序和裁剪，候选位于 candidates）：
         {json.dumps(attractions, ensure_ascii=False)}
 
-        天气信息：
+        天气信息（已统一为逐日 forecasts）：
         {json.dumps(weather, ensure_ascii=False)}
 
-        酒店信息：
+        酒店信息（已过滤、去重、排序和裁剪，候选位于 candidates）：
         {json.dumps(hotels, ensure_ascii=False)}
 
-        按照你收到的格式返回。
+        只返回一个 TripPlan JSON 对象，不要返回 Markdown 或解释。
+        顶层必须包含：city、start_date、end_date、days、weather_info、overall_suggestions、budget。
+        days 必须是每日行程数组，overall_suggestions 必须是字符串。
+        每个请求日期必须恰好对应一个 DayPlan，day_index 从 0 连续递增。
+        景点和酒店只能使用上面检索数据中存在的候选项，不得编造名称、地址或坐标。
+        不得使用 itinerary、schedule、daily_plan、suggestions 等字段替代必填字段。
         """
+        # 步骤 2：要求协议客户端返回 TripPlan 结构化输出。
+        response = self.invoke(input_info, response_model=TripPlan)
+        # 步骤 3：进行第二次本地结构校验后，才把结果交给编排器。
+        return _parse_trip_plan_response(response)
 
-        response = self.invoke(input_info)
+    def repair_plan(
+        self,
+        request: TripRequest,
+        current_plan: TripPlan,
+        validation_result: TripValidationResult,
+        attractions: dict,
+        weather: dict,
+        hotels: dict,
+    ) -> dict:
+        """只修复确定性校验器报告的问题，不重新决定整个执行流程。"""
 
-        try:
-            parsed = _extract_json_object(response)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise ValueError(
-                "Trip plan JSON parsing failed. The model output may be truncated "
-                f"or malformed: {exc}"
-            ) from exc
+        # 步骤 1：把当前计划、结构化问题和标准化候选数据一起发送给模型。
+        input_info = f"""
+        你是旅行计划修复器。下面的 TripPlan 已通过结构校验，但没有通过确定性语义校验。
+        请严格根据校验问题修复行程，保留所有正确内容，不要增加用户未要求的日期。
 
-        try:
-            return TripPlan.model_validate(parsed).model_dump()
-        except ValidationError as exc:
-            raise ValueError(
-                f"Trip plan structure validation failed: {exc}"
-            ) from exc
+        用户请求：
+        {request.model_dump_json()}
+
+        当前 TripPlan：
+        {current_plan.model_dump_json()}
+
+        必须修复的结构化校验结果：
+        {validation_result.model_dump_json()}
+
+        景点候选数据（标准化 candidates）：
+        {json.dumps(attractions, ensure_ascii=False)}
+
+        天气候选数据（标准化 forecasts）：
+        {json.dumps(weather, ensure_ascii=False)}
+
+        酒店候选数据（标准化 candidates）：
+        {json.dumps(hotels, ensure_ascii=False)}
+
+        修复规则：
+        1. 优先逐项处理 severity=error 的问题，同时尽量处理 warning。
+        2. city、start_date、end_date 和每天日期必须与用户请求一致。
+        3. days 数量必须等于 travel_days，day_index 从 0 连续递增。
+        4. 景点和酒店只能使用候选数据中存在的项目，不得编造名称、地址或坐标。
+        5. 只返回修复后的完整 TripPlan JSON 对象，不要返回补丁、Markdown 或解释。
+        """
+        # 步骤 2：模型返回完整计划，而不是补丁；随后再次执行本地结构校验。
+        response = self.invoke(input_info, response_model=TripPlan)
+        return _parse_trip_plan_response(response)

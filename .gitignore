@@ -42,3 +42,6 @@ logs/
 # --- 操作系统 ---
 .DS_Store
 Thumbs.db
+
+# --- Agent运行时记忆 ---
+data/
