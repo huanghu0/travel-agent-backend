@@ -36,6 +36,8 @@ class AttractionCandidate(PlaceCandidate):
     """可供规划模型选择的景点候选。"""
 
     category: str = ""
+    opening_hours: str = ""
+    closed_dates: list[str] = Field(default_factory=list)
 
 
 class HotelCandidate(PlaceCandidate):

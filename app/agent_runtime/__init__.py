@@ -1,4 +1,4 @@
-﻿"""Deterministic runtime primitives for the travel agent."""
+"""Deterministic runtime primitives for the travel agent."""
 
 from app.agent_runtime.exceptions import (
     AgentActionError,
@@ -18,7 +18,12 @@ from app.agent_runtime.state import (
     AgentAction,
     AgentState,
     AgentStatus,
+    ConstraintOptimizationRecord,
     ExecutionBudget,
+    RouteOptimizationRecord,
+    RouteOptimizationStatus,
+    ScheduleOptimizationRecord,
+    ScheduleOptimizationStatus,
 )
 from app.validation import (
     TripPlanValidator,
@@ -38,9 +43,14 @@ __all__ = [
     "AgentStatus",
     "CircuitBreaker",
     "CircuitState",
+    "ConstraintOptimizationRecord",
     "ExecutionBudget",
     "ExecutionPolicy",
     "RetryDecision",
+    "RouteOptimizationRecord",
+    "RouteOptimizationStatus",
+    "ScheduleOptimizationRecord",
+    "ScheduleOptimizationStatus",
     "TripOrchestrator",
     "TripPlanValidator",
     "TripValidationResult",

@@ -8,8 +8,10 @@ from app.agent_runtime import (
     AgentMaxStepsError,
     TripOrchestrator,
 )
+from app.constraints import ConstraintEvaluator, constraint_plan_fingerprint
 from app.routing import plan_route_fingerprint
 from app.schemas.trip_schema import TripPlan, TripPlanResponse, TripRequest
+from app.scheduling import ScheduleTimelineEvaluator
 
 
 def make_request() -> TripRequest:
@@ -162,6 +164,7 @@ class TripOrchestratorTests(unittest.TestCase):
                 AgentAction.SEARCH_HOTELS,
                 AgentAction.GENERATE_PLAN,
                 AgentAction.ESTIMATE_ROUTES,
+                AgentAction.EVALUATE_CONSTRAINTS,
                 AgentAction.VALIDATE_PLAN,
                 AgentAction.FINISH,
             ],
@@ -177,7 +180,7 @@ class TripOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(state.status, "completed")
         self.assertTrue(state.finished)
-        self.assertEqual(state.current_step, 7)
+        self.assertEqual(state.current_step, 8)
         self.assertEqual(state.session_id, "session-test")
         self.assertEqual(state.trip_plan.city, "成都")
         self.assertTrue(state.last_validation_result.valid)
@@ -205,6 +208,40 @@ class TripOrchestratorTests(unittest.TestCase):
             "truncated_legs": 0,
             "routes": [],
         }
+        # Checkpoints written before route scoring are upgraded by a local
+        # OPTIMIZE_ROUTES step before semantic validation.
+        self.assertEqual(
+            TripOrchestrator.decide_next_action(state),
+            AgentAction.OPTIMIZE_ROUTES,
+        )
+        TripOrchestrator._refresh_route_quality(state)
+        self.assertEqual(
+            TripOrchestrator.decide_next_action(state),
+            AgentAction.EVALUATE_SCHEDULE,
+        )
+        state.schedule_quality_report = ScheduleTimelineEvaluator().evaluate(
+            state.request,
+            state.trip_plan,
+            state.route_estimates,
+        )
+        state.schedule_quality_plan_fingerprint = fingerprint
+        state.schedule_optimization_status = "skipped"
+        self.assertEqual(
+            TripOrchestrator.decide_next_action(state),
+            AgentAction.EVALUATE_CONSTRAINTS,
+        )
+        state.constraint_report = ConstraintEvaluator().evaluate(
+            state.request,
+            state.trip_plan,
+            state.schedule_quality_report,
+            attractions=state.attractions,
+            weather=state.weather,
+        )
+        state.constraint_plan_fingerprint = constraint_plan_fingerprint(
+            state.request,
+            state.trip_plan,
+        )
+        state.constraint_optimization_status = "skipped"
         self.assertEqual(
             TripOrchestrator.decide_next_action(state),
             AgentAction.VALIDATE_PLAN,
@@ -242,9 +279,11 @@ class TripOrchestratorTests(unittest.TestCase):
                 AgentAction.SEARCH_HOTELS,
                 AgentAction.GENERATE_PLAN,
                 AgentAction.ESTIMATE_ROUTES,
+                AgentAction.EVALUATE_CONSTRAINTS,
                 AgentAction.VALIDATE_PLAN,
                 AgentAction.REPAIR_PLAN,
                 AgentAction.ESTIMATE_ROUTES,
+                AgentAction.EVALUATE_CONSTRAINTS,
                 AgentAction.VALIDATE_PLAN,
                 AgentAction.FINISH,
             ],

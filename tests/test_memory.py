@@ -142,7 +142,7 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
 
         self.assertEqual(
             [len(item.action_history) for item in recording_store.snapshots],
-            [0, 1, 2, 3, 4, 5, 6, 7],
+            [0, 1, 2, 3, 4, 5, 6, 7, 8],
         )
         self.assertEqual(recording_store.snapshots[0].status, "running")
         self.assertEqual(recording_store.snapshots[-1].status, "completed")
@@ -154,7 +154,7 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
 
         self.assertEqual(loaded, state)
         self.assertEqual(loaded.status, "completed")
-        self.assertEqual(len(loaded.action_history), 7)
+        self.assertEqual(len(loaded.action_history), 8)
         self.assertEqual(loaded.action_history[-1].action, AgentAction.FINISH)
         self.assertIsNotNone(loaded.created_at.tzinfo)
         self.assertIsNotNone(loaded.updated_at.tzinfo)
@@ -185,11 +185,71 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         payload["state_version"] = 4
         payload.pop("route_estimates")
         payload.pop("route_plan_fingerprint")
+        for field in (
+            "route_quality_report",
+            "route_quality_plan_fingerprint",
+            "route_optimization_count",
+            "route_optimization_status",
+            "route_optimization_candidate",
+            "route_optimization_baseline_plan",
+            "route_optimization_baseline_routes",
+            "route_optimization_baseline_quality",
+            "route_optimization_baseline_fingerprint",
+            "route_optimization_history",
+            "schedule_quality_report",
+            "schedule_quality_plan_fingerprint",
+            "schedule_optimization_count",
+            "schedule_optimization_status",
+            "schedule_optimization_candidate",
+            "schedule_optimization_baseline_plan",
+            "schedule_optimization_baseline_routes",
+            "schedule_optimization_baseline_route_quality",
+            "schedule_optimization_baseline_quality",
+            "schedule_optimization_baseline_fingerprint",
+            "schedule_optimization_history",
+            "constraint_report",
+            "constraint_plan_fingerprint",
+            "constraint_optimization_count",
+            "constraint_optimization_status",
+            "constraint_optimization_candidate",
+            "constraint_optimization_baseline_plan",
+            "constraint_optimization_baseline_routes",
+            "constraint_optimization_baseline_route_quality",
+            "constraint_optimization_baseline_schedule",
+            "constraint_optimization_baseline_report",
+            "constraint_optimization_baseline_fingerprint",
+            "constraint_optimization_history",
+        ):
+            payload.pop(field)
+        payload["execution_budget"].pop("max_route_optimization_attempts")
+        payload["execution_budget"].pop("max_schedule_optimization_attempts")
+        payload["execution_budget"].pop("max_constraint_optimization_attempts")
 
         loaded = AgentState.model_validate(payload)
 
         self.assertIsNone(loaded.route_estimates)
         self.assertIsNone(loaded.route_plan_fingerprint)
+        self.assertIsNone(loaded.route_quality_report)
+        self.assertEqual(loaded.route_optimization_count, 0)
+        self.assertEqual(loaded.route_optimization_status, "not_started")
+        self.assertEqual(
+            loaded.execution_budget.max_route_optimization_attempts,
+            1,
+        )
+        self.assertIsNone(loaded.schedule_quality_report)
+        self.assertEqual(loaded.schedule_optimization_count, 0)
+        self.assertEqual(loaded.schedule_optimization_status, "not_started")
+        self.assertEqual(
+            loaded.execution_budget.max_schedule_optimization_attempts,
+            1,
+        )
+        self.assertIsNone(loaded.constraint_report)
+        self.assertEqual(loaded.constraint_optimization_count, 0)
+        self.assertEqual(loaded.constraint_optimization_status, "not_started")
+        self.assertEqual(
+            loaded.execution_budget.max_constraint_optimization_attempts,
+            1,
+        )
 
     def test_missing_session_raises_specific_error(self):
         with self.assertRaises(SessionNotFoundError):

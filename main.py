@@ -60,6 +60,45 @@ trip_orchestrator = TripOrchestrator(
     max_steps=settings.AGENT_MAX_STEPS,
     max_attempts_per_action=settings.AGENT_MAX_ATTEMPTS_PER_ACTION,
     max_repair_attempts=settings.AGENT_MAX_REPAIR_ATTEMPTS,
+    max_route_optimization_attempts=(
+        settings.AGENT_MAX_ROUTE_OPTIMIZATION_ATTEMPTS
+    ),
+    route_optimization_max_candidates=(
+        settings.ROUTE_OPTIMIZATION_MAX_CANDIDATES
+    ),
+    route_optimization_min_improvement_percent=(
+        settings.ROUTE_OPTIMIZATION_MIN_IMPROVEMENT_PERCENT
+    ),
+    max_schedule_optimization_attempts=(
+        settings.AGENT_MAX_SCHEDULE_OPTIMIZATION_ATTEMPTS
+    ),
+    schedule_optimization_max_candidates=(
+        settings.SCHEDULE_OPTIMIZATION_MAX_CANDIDATES
+    ),
+    schedule_optimization_min_improvement_percent=(
+        settings.SCHEDULE_OPTIMIZATION_MIN_IMPROVEMENT_PERCENT
+    ),
+    schedule_default_start_time=settings.SCHEDULE_DEFAULT_START_TIME,
+    schedule_default_end_time=settings.SCHEDULE_DEFAULT_END_TIME,
+    schedule_lunch_duration_minutes=settings.SCHEDULE_LUNCH_DURATION_MINUTES,
+    schedule_route_buffer_minutes=settings.SCHEDULE_ROUTE_BUFFER_MINUTES,
+    schedule_attraction_buffer_minutes=(
+        settings.SCHEDULE_ATTRACTION_BUFFER_MINUTES
+    ),
+    max_constraint_optimization_attempts=(
+        settings.AGENT_MAX_CONSTRAINT_OPTIMIZATION_ATTEMPTS
+    ),
+    constraint_optimization_max_candidates=(
+        settings.CONSTRAINT_OPTIMIZATION_MAX_CANDIDATES
+    ),
+    constraint_optimization_min_improvement_percent=(
+        settings.CONSTRAINT_OPTIMIZATION_MIN_IMPROVEMENT_PERCENT
+    ),
+    constraint_lunch_window_start=settings.CONSTRAINT_LUNCH_WINDOW_START,
+    constraint_lunch_window_end=settings.CONSTRAINT_LUNCH_WINDOW_END,
+    constraint_daily_attraction_soft_limit=(
+        settings.CONSTRAINT_DAILY_ATTRACTION_SOFT_LIMIT
+    ),
     max_duration_seconds=settings.AGENT_MAX_DURATION_SECONDS,
     max_tool_calls=settings.AGENT_MAX_TOOL_CALLS,
     max_llm_calls=settings.AGENT_MAX_LLM_CALLS,
@@ -77,6 +116,12 @@ _STAGE_NAMES = {
     "get_weather": "天气查询",
     "search_hotels": "酒店搜索",
     "generate_plan": "行程生成",
+    "estimate_routes": "路线查询",
+    "optimize_routes": "路线优化",
+    "evaluate_schedule": "时间轴评估",
+    "optimize_schedule": "日程优化",
+    "evaluate_constraints": "\u53ef\u6267\u884c\u6027\u7ea6\u675f\u8bc4\u4f30",
+    "optimize_constraints": "\u7ea6\u675f\u51b2\u7a81\u4f18\u5316",
     "validate_plan": "行程校验",
     "repair_plan": "行程修复",
     "finish": "完成",

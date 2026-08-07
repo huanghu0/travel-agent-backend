@@ -1,4 +1,4 @@
-﻿"""把高德原始 JSON 转换成稳定、紧凑的业务模型。"""
+"""把高德原始 JSON 转换成稳定、紧凑的业务模型。"""
 
 from __future__ import annotations
 
@@ -144,6 +144,9 @@ def normalize_attractions(
                 address=address,
                 location=location,
                 category=_text(raw.get("type")),
+                opening_hours=_text(
+                    biz_ext.get("opentime", raw.get("opentime", ""))
+                ),
                 district=_text(raw.get("adname")),
                 city_code=_text(raw.get("citycode")),
                 adcode=_text(raw.get("adcode")),

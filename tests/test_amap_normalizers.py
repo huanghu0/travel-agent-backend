@@ -37,7 +37,7 @@ class AmapNormalizerTests(unittest.TestCase):
                     "address": "成都二街",
                     "location": "104.20,30.70",
                     "type": "博物馆",
-                    "biz_ext": {"rating": "5.0"},
+                    "biz_ext": {"rating": "5.0", "opentime": "09:00-17:00"},
                 },
                 {
                     "id": "missing-address",

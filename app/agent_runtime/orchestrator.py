@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Protocol
 
 from app.agent_runtime.exceptions import (
@@ -10,10 +11,33 @@ from app.agent_runtime.exceptions import (
     AgentMaxStepsError,
 )
 from app.agent_runtime.execution_policy import CircuitBreaker, ExecutionPolicy
-from app.agent_runtime.state import ActionRecord, AgentAction, AgentState
+from app.agent_runtime.state import (
+    ActionRecord,
+    AgentAction,
+    AgentState,
+    ConstraintOptimizationRecord,
+    RouteOptimizationRecord,
+    ScheduleOptimizationRecord,
+)
+from app.constraints import (
+    ConstraintEvaluator,
+    DeterministicConstraintOptimizer,
+    constraint_plan_fingerprint,
+)
 from app.providers.amap.models import RouteEstimateResult
-from app.routing import build_route_legs, plan_route_fingerprint
+from app.routing import (
+    DeterministicRouteOptimizer,
+    build_route_legs,
+    evaluate_route_quality,
+    is_route_quality_improvement,
+    plan_route_fingerprint,
+    route_quality_improvement_percent,
+)
 from app.schemas.trip_schema import TripPlan, TripRequest
+from app.scheduling import (
+    DeterministicScheduleOptimizer,
+    ScheduleTimelineEvaluator,
+)
 from app.tools.models import ActionResult, ToolErrorType
 from app.tools.registry import ToolRegistry
 from app.tools.trip_registry import build_trip_tool_registry
@@ -32,6 +56,11 @@ _ACTION_REASONS = {
     AgentAction.SEARCH_HOTELS: "酒店数据尚未获取",
     AgentAction.GENERATE_PLAN: "基础数据已就绪，需要生成行程",
     AgentAction.ESTIMATE_ROUTES: "行程已生成，需要查询相邻景点的真实路线",
+    AgentAction.OPTIMIZE_ROUTES: "路线质量较低，需要执行有界确定性排序优化",
+    AgentAction.EVALUATE_SCHEDULE: "行程路线已就绪，需要执行确定性时间轴评估",
+    AgentAction.OPTIMIZE_SCHEDULE: "日程存在超时，需要执行有界确定性跨日优化",
+    AgentAction.EVALUATE_CONSTRAINTS: "\u65f6\u95f4\u8f74\u5df2\u5c31\u7eea\uff0c\u9700\u8981\u8bc4\u4f30\u884c\u7a0b\u53ef\u6267\u884c\u6027\u7ea6\u675f",
+    AgentAction.OPTIMIZE_CONSTRAINTS: "\u884c\u7a0b\u5b58\u5728\u53ef\u4fee\u590d\u7ea6\u675f\u51b2\u7a81\uff0c\u9700\u8981\u6267\u884c\u6709\u754c\u786e\u5b9a\u6027\u4f18\u5316",
     AgentAction.VALIDATE_PLAN: "行程已生成，需要执行确定性语义校验",
     AgentAction.REPAIR_PLAN: "行程未通过校验，需要根据结构化问题修复",
     AgentAction.FINISH: "行程已通过校验，结束执行",
@@ -50,9 +79,31 @@ class TripOrchestrator:
         hotel_agent: Any = None,
         planner_agent: Any = None,
         validator: TripPlanValidator | None = None,
-        max_steps: int = 16,
+        max_steps: int = 24,
         max_attempts_per_action: int = 2,
         max_repair_attempts: int = 2,
+        max_route_optimization_attempts: int = 1,
+        route_optimization_max_candidates: int = 6,
+        route_optimization_min_improvement_percent: float = 10.0,
+        route_optimizer: DeterministicRouteOptimizer | None = None,
+        max_schedule_optimization_attempts: int = 1,
+        schedule_optimization_max_candidates: int = 6,
+        schedule_optimization_min_improvement_percent: float = 10.0,
+        schedule_default_start_time: str = "09:00",
+        schedule_default_end_time: str = "18:00",
+        schedule_lunch_duration_minutes: int = 60,
+        schedule_route_buffer_minutes: int = 10,
+        schedule_attraction_buffer_minutes: int = 10,
+        schedule_evaluator: ScheduleTimelineEvaluator | None = None,
+        schedule_optimizer: DeterministicScheduleOptimizer | None = None,
+        max_constraint_optimization_attempts: int = 1,
+        constraint_optimization_max_candidates: int = 8,
+        constraint_optimization_min_improvement_percent: float = 10.0,
+        constraint_lunch_window_start: str = "11:30",
+        constraint_lunch_window_end: str = "14:00",
+        constraint_daily_attraction_soft_limit: int = 5,
+        constraint_evaluator: ConstraintEvaluator | None = None,
+        constraint_optimizer: DeterministicConstraintOptimizer | None = None,
         max_duration_seconds: float = 180.0,
         max_tool_calls: int = 15,
         max_llm_calls: int = 6,
@@ -71,6 +122,30 @@ class TripOrchestrator:
             raise ValueError("max_attempts_per_action must be at least 1")
         if max_repair_attempts < 0:
             raise ValueError("max_repair_attempts cannot be negative")
+        if max_route_optimization_attempts < 0:
+            raise ValueError("max_route_optimization_attempts cannot be negative")
+        if route_optimization_max_candidates < 1:
+            raise ValueError("route_optimization_max_candidates must be at least 1")
+        if route_optimization_min_improvement_percent < 0:
+            raise ValueError(
+                "route_optimization_min_improvement_percent cannot be negative"
+            )
+        if max_schedule_optimization_attempts < 0:
+            raise ValueError("max_schedule_optimization_attempts cannot be negative")
+        if schedule_optimization_max_candidates < 1:
+            raise ValueError("schedule_optimization_max_candidates must be at least 1")
+        if schedule_optimization_min_improvement_percent < 0:
+            raise ValueError(
+                "schedule_optimization_min_improvement_percent cannot be negative"
+            )
+        if max_constraint_optimization_attempts < 0:
+            raise ValueError("max_constraint_optimization_attempts cannot be negative")
+        if constraint_optimization_max_candidates < 1:
+            raise ValueError("constraint_optimization_max_candidates must be at least 1")
+        if constraint_optimization_min_improvement_percent < 0:
+            raise ValueError(
+                "constraint_optimization_min_improvement_percent cannot be negative"
+            )
         if max_duration_seconds <= 0:
             raise ValueError("max_duration_seconds must be positive")
         if max_tool_calls < 0 or max_llm_calls < 0:
@@ -94,6 +169,46 @@ class TripOrchestrator:
         self.max_steps = max_steps
         self.max_attempts_per_action = max_attempts_per_action
         self.max_repair_attempts = max_repair_attempts
+        self.max_route_optimization_attempts = max_route_optimization_attempts
+        self.route_optimization_min_improvement_percent = (
+            route_optimization_min_improvement_percent
+        )
+        self.route_optimizer = route_optimizer or DeterministicRouteOptimizer(
+            max_candidates=route_optimization_max_candidates
+        )
+        self.max_schedule_optimization_attempts = (
+            max_schedule_optimization_attempts
+        )
+        self.schedule_optimization_min_improvement_percent = (
+            schedule_optimization_min_improvement_percent
+        )
+        self.schedule_evaluator = schedule_evaluator or ScheduleTimelineEvaluator(
+            default_start_time=schedule_default_start_time,
+            default_end_time=schedule_default_end_time,
+            lunch_duration_minutes=schedule_lunch_duration_minutes,
+            route_buffer_minutes=schedule_route_buffer_minutes,
+            attraction_buffer_minutes=schedule_attraction_buffer_minutes,
+        )
+        self.schedule_optimizer = schedule_optimizer or DeterministicScheduleOptimizer(
+            evaluator=self.schedule_evaluator,
+            max_candidates=schedule_optimization_max_candidates,
+        )
+        self.max_constraint_optimization_attempts = (
+            max_constraint_optimization_attempts
+        )
+        self.constraint_optimization_min_improvement_percent = (
+            constraint_optimization_min_improvement_percent
+        )
+        self.constraint_evaluator = constraint_evaluator or ConstraintEvaluator(
+            lunch_window_start=constraint_lunch_window_start,
+            lunch_window_end=constraint_lunch_window_end,
+            daily_attraction_soft_limit=constraint_daily_attraction_soft_limit,
+        )
+        self.constraint_optimizer = constraint_optimizer or DeterministicConstraintOptimizer(
+            evaluator=self.constraint_evaluator,
+            schedule_evaluator=self.schedule_evaluator,
+            max_candidates=constraint_optimization_max_candidates,
+        )
         self.max_duration_seconds = max_duration_seconds
         self.max_tool_calls = max_tool_calls
         self.max_llm_calls = max_llm_calls
@@ -118,6 +233,13 @@ class TripOrchestrator:
             request,
             max_steps=self.max_steps,
             max_repair_attempts=self.max_repair_attempts,
+            max_route_optimization_attempts=self.max_route_optimization_attempts,
+            max_schedule_optimization_attempts=(
+                self.max_schedule_optimization_attempts
+            ),
+            max_constraint_optimization_attempts=(
+                self.max_constraint_optimization_attempts
+            ),
             max_duration_seconds=self.max_duration_seconds,
             max_tool_calls=self.max_tool_calls,
             max_llm_calls=self.max_llm_calls,
@@ -197,6 +319,59 @@ class TripOrchestrator:
             or state.route_plan_fingerprint != current_route_fingerprint
         ):
             return AgentAction.ESTIMATE_ROUTES
+
+        # Every current route snapshot must have a score before downstream
+        # schedule evaluation. This also upgrades older SQLite checkpoints.
+        if (
+            state.route_quality_report is None
+            or state.route_quality_plan_fingerprint != current_route_fingerprint
+        ):
+            return AgentAction.OPTIMIZE_ROUTES
+
+        # Route ordering always reaches a terminal state before schedule balancing.
+        if state.route_optimization_status == "candidate_pending":
+            return AgentAction.OPTIMIZE_ROUTES
+        if (
+            state.route_optimization_status == "not_started"
+            and state.route_quality_report.optimization_recommended
+            and state.route_optimization_count
+            < state.execution_budget.max_route_optimization_attempts
+        ):
+            return AgentAction.OPTIMIZE_ROUTES
+
+        # Build a timeline locally for old checkpoints or stale plan-derived data.
+        if (
+            state.schedule_quality_report is None
+            or state.schedule_quality_plan_fingerprint != current_route_fingerprint
+        ):
+            return AgentAction.EVALUATE_SCHEDULE
+
+        # A moved attraction receives fresh real routes before acceptance.
+        if state.schedule_optimization_status == "candidate_pending":
+            return AgentAction.OPTIMIZE_SCHEDULE
+        if (
+            state.schedule_optimization_status == "not_started"
+            and state.schedule_quality_report.optimization_recommended
+        ):
+            return AgentAction.OPTIMIZE_SCHEDULE
+
+        current_constraint_fingerprint = constraint_plan_fingerprint(
+            state.request,
+            state.trip_plan,
+        )
+        if (
+            state.constraint_report is None
+            or state.constraint_plan_fingerprint != current_constraint_fingerprint
+        ):
+            return AgentAction.EVALUATE_CONSTRAINTS
+        if state.constraint_optimization_status == "candidate_pending":
+            return AgentAction.OPTIMIZE_CONSTRAINTS
+        if (
+            state.constraint_optimization_status == "not_started"
+            and state.constraint_report.optimization_recommended
+        ):
+            return AgentAction.OPTIMIZE_CONSTRAINTS
+
         if state.last_validation_result is None:
             return AgentAction.VALIDATE_PLAN
         # 校验通过后进入终态。
@@ -246,6 +421,23 @@ class TripOrchestrator:
             return
 
         # 步骤 4：其余动作通过 ExecutionPolicy 调用白名单工具。
+        # Local deterministic optimization consumes neither tool nor LLM budget.
+        if action is AgentAction.OPTIMIZE_ROUTES:
+            self._optimize_routes(state, reason, lifetime_attempt)
+            return
+        if action is AgentAction.EVALUATE_SCHEDULE:
+            self._evaluate_schedule(state, reason, lifetime_attempt)
+            return
+        if action is AgentAction.OPTIMIZE_SCHEDULE:
+            self._optimize_schedule(state, reason, lifetime_attempt)
+            return
+        if action is AgentAction.EVALUATE_CONSTRAINTS:
+            self._evaluate_constraints(state, reason, lifetime_attempt)
+            return
+        if action is AgentAction.OPTIMIZE_CONSTRAINTS:
+            self._optimize_constraints(state, reason, lifetime_attempt)
+            return
+
         tool_result = self.execution_policy.execute_once(
             state,
             action.value,
@@ -353,6 +545,842 @@ class TripOrchestrator:
             )
         )
 
+    @staticmethod
+    def _refresh_route_quality(state: AgentState):
+        """Build the quality report for the current plan and route snapshot."""
+
+        if state.trip_plan is None or state.route_estimates is None:
+            raise ValueError("Trip plan and route estimates are required for scoring")
+        current_fingerprint = plan_route_fingerprint(state.request, state.trip_plan)
+        route_result = RouteEstimateResult.model_validate(state.route_estimates)
+        if route_result.plan_fingerprint != current_fingerprint:
+            raise ValueError("Route estimates do not match the current trip plan")
+        report = evaluate_route_quality(state.trip_plan, route_result)
+        state.route_quality_report = report
+        state.route_quality_plan_fingerprint = current_fingerprint
+        return report
+
+    @staticmethod
+    def _clear_route_analysis(
+        state: AgentState,
+        *,
+        reset_optimization_count: bool,
+    ) -> None:
+        """Clear route-derived data after a plan mutation."""
+
+        state.route_estimates = None
+        state.route_plan_fingerprint = None
+        state.route_quality_report = None
+        state.route_quality_plan_fingerprint = None
+        state.route_optimization_status = "not_started"
+        state.route_optimization_candidate = None
+        state.route_optimization_baseline_plan = None
+        state.route_optimization_baseline_routes = None
+        state.route_optimization_baseline_quality = None
+        state.route_optimization_baseline_fingerprint = None
+        state.schedule_quality_report = None
+        state.schedule_quality_plan_fingerprint = None
+        state.schedule_optimization_status = "not_started"
+        state.schedule_optimization_candidate = None
+        state.schedule_optimization_baseline_plan = None
+        state.schedule_optimization_baseline_routes = None
+        state.schedule_optimization_baseline_route_quality = None
+        state.schedule_optimization_baseline_quality = None
+        state.schedule_optimization_baseline_fingerprint = None
+        TripOrchestrator._clear_constraint_analysis(
+            state,
+            reset_optimization_count=reset_optimization_count,
+        )
+        if reset_optimization_count:
+            state.route_optimization_count = 0
+            state.schedule_optimization_count = 0
+        state.last_validation_result = None
+
+    @staticmethod
+    def _clear_constraint_analysis(
+        state: AgentState,
+        *,
+        reset_optimization_count: bool,
+    ) -> None:
+        """Clear all reports and baselines derived from execution constraints."""
+
+        state.constraint_report = None
+        state.constraint_plan_fingerprint = None
+        state.constraint_optimization_status = "not_started"
+        state.constraint_optimization_candidate = None
+        state.constraint_optimization_baseline_plan = None
+        state.constraint_optimization_baseline_routes = None
+        state.constraint_optimization_baseline_route_quality = None
+        state.constraint_optimization_baseline_schedule = None
+        state.constraint_optimization_baseline_report = None
+        state.constraint_optimization_baseline_fingerprint = None
+        if reset_optimization_count:
+            state.constraint_optimization_count = 0
+
+    @staticmethod
+    def _clear_route_optimization_baseline(state: AgentState) -> None:
+        state.route_optimization_candidate = None
+        state.route_optimization_baseline_plan = None
+        state.route_optimization_baseline_routes = None
+        state.route_optimization_baseline_quality = None
+        state.route_optimization_baseline_fingerprint = None
+
+    def _record_local_route_action(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        state.action_history.append(
+            ActionRecord(
+                step=state.current_step,
+                action=AgentAction.OPTIMIZE_ROUTES,
+                reason=reason,
+                attempt=lifetime_attempt,
+                success=True,
+            )
+        )
+
+    def _optimize_routes(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        """Propose or resolve one bounded route-order candidate."""
+
+        if state.trip_plan is None or state.route_estimates is None:
+            raise ValueError("Trip plan and route estimates are required for optimization")
+        current_fingerprint = plan_route_fingerprint(state.request, state.trip_plan)
+        report = state.route_quality_report
+        if (
+            report is None
+            or state.route_quality_plan_fingerprint != current_fingerprint
+        ):
+            report = self._refresh_route_quality(state)
+
+        # Second pass: compare the candidate's real Amap route quality with the
+        # persisted baseline. Rejecting restores all baseline data without a call.
+        if state.route_optimization_status == "candidate_pending":
+            baseline_plan = state.route_optimization_baseline_plan
+            baseline_routes = state.route_optimization_baseline_routes
+            baseline_quality = state.route_optimization_baseline_quality
+            baseline_fingerprint = state.route_optimization_baseline_fingerprint
+            candidate = state.route_optimization_candidate
+            if not all((baseline_plan, baseline_routes, baseline_quality, baseline_fingerprint, candidate)):
+                raise ValueError("Pending route optimization is missing baseline data")
+
+            assert baseline_quality is not None
+            assert candidate is not None
+            actual_improvement = route_quality_improvement_percent(
+                baseline_quality,
+                report,
+            )
+            accepted = is_route_quality_improvement(
+                baseline_quality,
+                report,
+                min_improvement_percent=self.route_optimization_min_improvement_percent,
+            )
+            candidate_fingerprint = current_fingerprint
+            if accepted:
+                status = "accepted"
+                outcome_reason = (
+                    "Candidate accepted after real route quality improved by "
+                    f"{actual_improvement:.2f}%"
+                )
+            else:
+                status = "reverted"
+                outcome_reason = (
+                    "Candidate reverted because real route improvement was below "
+                    f"{self.route_optimization_min_improvement_percent:.2f}% or worsened hard failures"
+                )
+                state.trip_plan = baseline_plan.model_copy(deep=True)
+                state.route_estimates = deepcopy(baseline_routes)
+                state.route_plan_fingerprint = baseline_fingerprint
+                state.route_quality_report = baseline_quality.model_copy(deep=True)
+                state.route_quality_plan_fingerprint = baseline_fingerprint
+                state.schedule_optimization_status = "not_started"
+                self._refresh_schedule_quality(state)
+
+            state.route_optimization_history.append(
+                RouteOptimizationRecord(
+                    attempt=state.route_optimization_count,
+                    status=status,
+                    reason=outcome_reason,
+                    baseline_fingerprint=baseline_fingerprint,
+                    candidate_fingerprint=candidate_fingerprint,
+                    strategy=candidate.strategy,
+                    changed_day_index=candidate.changed_day_index,
+                    approximate_improvement_percent=(
+                        candidate.approximate_improvement_percent
+                    ),
+                    actual_improvement_percent=actual_improvement,
+                    baseline_cost=baseline_quality.optimization_cost,
+                    candidate_cost=report.optimization_cost,
+                )
+            )
+            state.route_optimization_status = "completed"
+            self._clear_route_optimization_baseline(state)
+            state.last_validation_result = None
+            self._record_local_route_action(state, reason, lifetime_attempt)
+            return
+
+        max_attempts = state.execution_budget.max_route_optimization_attempts
+        if state.route_optimization_count >= max_attempts:
+            state.route_optimization_status = "skipped"
+            state.route_optimization_history.append(
+                RouteOptimizationRecord(
+                    attempt=state.route_optimization_count,
+                    status="skipped",
+                    reason="Route optimization attempt budget is exhausted",
+                    baseline_fingerprint=current_fingerprint,
+                    baseline_cost=report.optimization_cost,
+                )
+            )
+            self._record_local_route_action(state, reason, lifetime_attempt)
+            return
+
+        if not report.optimization_recommended:
+            state.route_optimization_status = "skipped"
+            state.route_optimization_history.append(
+                RouteOptimizationRecord(
+                    attempt=state.route_optimization_count,
+                    status="skipped",
+                    reason="Current route quality does not require reordering",
+                    baseline_fingerprint=current_fingerprint,
+                    baseline_cost=report.optimization_cost,
+                )
+            )
+            self._record_local_route_action(state, reason, lifetime_attempt)
+            return
+
+        candidate = self.route_optimizer.optimize(state.trip_plan)
+        if candidate is None:
+            state.route_optimization_status = "skipped"
+            state.route_optimization_history.append(
+                RouteOptimizationRecord(
+                    attempt=state.route_optimization_count,
+                    status="skipped",
+                    reason="No shorter deterministic geographic candidate was found",
+                    baseline_fingerprint=current_fingerprint,
+                    baseline_cost=report.optimization_cost,
+                )
+            )
+            self._record_local_route_action(state, reason, lifetime_attempt)
+            return
+
+        state.route_optimization_baseline_plan = state.trip_plan.model_copy(deep=True)
+        state.route_optimization_baseline_routes = deepcopy(state.route_estimates)
+        state.route_optimization_baseline_quality = report.model_copy(deep=True)
+        state.route_optimization_baseline_fingerprint = current_fingerprint
+        state.route_optimization_candidate = candidate.model_copy(deep=True)
+        state.trip_plan = candidate.plan.model_copy(deep=True)
+        state.route_optimization_count += 1
+        state.route_optimization_status = "candidate_pending"
+        state.route_estimates = None
+        state.route_plan_fingerprint = None
+        state.route_quality_report = None
+        state.route_quality_plan_fingerprint = None
+        state.schedule_quality_report = None
+        state.schedule_quality_plan_fingerprint = None
+        state.schedule_optimization_status = "not_started"
+        state.schedule_optimization_candidate = None
+        state.schedule_optimization_baseline_plan = None
+        state.schedule_optimization_baseline_routes = None
+        state.schedule_optimization_baseline_route_quality = None
+        state.schedule_optimization_baseline_quality = None
+        state.schedule_optimization_baseline_fingerprint = None
+        self._clear_constraint_analysis(state, reset_optimization_count=False)
+        state.last_validation_result = None
+        self._record_local_route_action(state, reason, lifetime_attempt)
+
+    def _refresh_schedule_quality(self, state: AgentState):
+        """Build the current timeline report from the persisted route snapshot."""
+
+        if state.trip_plan is None or state.route_estimates is None:
+            raise ValueError("Trip plan and route estimates are required for schedule scoring")
+        current_fingerprint = plan_route_fingerprint(state.request, state.trip_plan)
+        route_result = RouteEstimateResult.model_validate(state.route_estimates)
+        if route_result.plan_fingerprint != current_fingerprint:
+            raise ValueError("Route estimates do not match the current trip plan")
+        report = self.schedule_evaluator.evaluate(
+            state.request,
+            state.trip_plan,
+            route_result,
+        )
+        state.schedule_quality_report = report
+        state.schedule_quality_plan_fingerprint = current_fingerprint
+        if (
+            state.schedule_optimization_status == "not_started"
+            and not report.optimization_recommended
+        ):
+            state.schedule_optimization_status = "skipped"
+        return report
+
+    @staticmethod
+    def _schedule_improvement_percent(before, after) -> float:
+        if before.optimization_cost <= 0:
+            return 0.0
+        return round(
+            (before.optimization_cost - after.optimization_cost)
+            / before.optimization_cost
+            * 100.0,
+            2,
+        )
+
+    @staticmethod
+    def _clear_schedule_optimization_baseline(state: AgentState) -> None:
+        state.schedule_optimization_candidate = None
+        state.schedule_optimization_baseline_plan = None
+        state.schedule_optimization_baseline_routes = None
+        state.schedule_optimization_baseline_route_quality = None
+        state.schedule_optimization_baseline_quality = None
+        state.schedule_optimization_baseline_fingerprint = None
+
+    @staticmethod
+    def _record_local_schedule_action(
+        state: AgentState,
+        action: AgentAction,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        state.action_history.append(
+            ActionRecord(
+                step=state.current_step,
+                action=action,
+                reason=reason,
+                attempt=lifetime_attempt,
+                success=True,
+            )
+        )
+
+    def _evaluate_schedule(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        """Evaluate a stale/legacy checkpoint without invoking any external tool."""
+
+        self._refresh_schedule_quality(state)
+        self._record_local_schedule_action(
+            state,
+            AgentAction.EVALUATE_SCHEDULE,
+            reason,
+            lifetime_attempt,
+        )
+
+    def _optimize_schedule(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        """Propose or resolve one bounded cross-day schedule candidate."""
+
+        if state.trip_plan is None or state.route_estimates is None:
+            raise ValueError("Trip plan and route estimates are required for schedule optimization")
+        current_fingerprint = plan_route_fingerprint(state.request, state.trip_plan)
+        report = state.schedule_quality_report
+        if (
+            report is None
+            or state.schedule_quality_plan_fingerprint != current_fingerprint
+        ):
+            report = self._refresh_schedule_quality(state)
+
+        # Verification pass after Amap routes have been fetched for the candidate.
+        if state.schedule_optimization_status == "candidate_pending":
+            baseline_plan = state.schedule_optimization_baseline_plan
+            baseline_routes = state.schedule_optimization_baseline_routes
+            baseline_route_quality = state.schedule_optimization_baseline_route_quality
+            baseline_quality = state.schedule_optimization_baseline_quality
+            baseline_fingerprint = state.schedule_optimization_baseline_fingerprint
+            candidate = state.schedule_optimization_candidate
+            if any(
+                item is None
+                for item in (
+                    baseline_plan,
+                    baseline_routes,
+                    baseline_route_quality,
+                    baseline_quality,
+                    baseline_fingerprint,
+                    candidate,
+                )
+            ):
+                raise ValueError("Pending schedule optimization is missing baseline data")
+            if state.route_quality_report is None:
+                raise ValueError("Candidate route quality is missing")
+
+            assert baseline_quality is not None
+            assert baseline_route_quality is not None
+            assert candidate is not None
+            candidate_cost = report.optimization_cost
+            actual_improvement = self._schedule_improvement_percent(
+                baseline_quality,
+                report,
+            )
+            route_quality_safe = (
+                state.route_quality_report.unavailable_legs
+                <= baseline_route_quality.unavailable_legs
+                and state.route_quality_report.excessive_duration_legs
+                <= baseline_route_quality.excessive_duration_legs
+            )
+            accepted = (
+                report.optimization_cost < baseline_quality.optimization_cost
+                and actual_improvement
+                >= self.schedule_optimization_min_improvement_percent
+                and report.total_overtime_minutes
+                <= baseline_quality.total_overtime_minutes
+                and report.infeasible_days <= baseline_quality.infeasible_days
+                and report.fallback_route_legs <= baseline_quality.fallback_route_legs
+                and route_quality_safe
+            )
+            candidate_fingerprint = current_fingerprint
+            if accepted:
+                status = "accepted"
+                outcome_reason = (
+                    "Candidate accepted after real schedule cost improved by "
+                    f"{actual_improvement:.2f}%"
+                )
+            else:
+                status = "reverted"
+                outcome_reason = (
+                    "Candidate reverted because real schedule improvement was below "
+                    f"{self.schedule_optimization_min_improvement_percent:.2f}% "
+                    "or route/schedule hard metrics worsened"
+                )
+                state.trip_plan = baseline_plan.model_copy(deep=True)
+                state.route_estimates = deepcopy(baseline_routes)
+                state.route_plan_fingerprint = baseline_fingerprint
+                state.route_quality_report = baseline_route_quality.model_copy(deep=True)
+                state.route_quality_plan_fingerprint = baseline_fingerprint
+                state.schedule_quality_report = baseline_quality.model_copy(deep=True)
+                state.schedule_quality_plan_fingerprint = baseline_fingerprint
+
+            state.schedule_optimization_history.append(
+                ScheduleOptimizationRecord(
+                    attempt=state.schedule_optimization_count,
+                    status=status,
+                    reason=outcome_reason,
+                    baseline_fingerprint=baseline_fingerprint,
+                    candidate_fingerprint=candidate_fingerprint,
+                    strategy=candidate.strategy,
+                    source_day_index=candidate.source_day_index,
+                    target_day_index=candidate.target_day_index,
+                    moved_attraction_name=candidate.moved_attraction_name,
+                    approximate_improvement_percent=(
+                        candidate.approximate_improvement_percent
+                    ),
+                    actual_improvement_percent=actual_improvement,
+                    baseline_cost=baseline_quality.optimization_cost,
+                    candidate_cost=candidate_cost,
+                )
+            )
+            state.schedule_optimization_status = "completed"
+            self._clear_schedule_optimization_baseline(state)
+            state.last_validation_result = None
+            self._record_local_schedule_action(
+                state,
+                AgentAction.OPTIMIZE_SCHEDULE,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        max_attempts = state.execution_budget.max_schedule_optimization_attempts
+        if state.schedule_optimization_count >= max_attempts:
+            state.schedule_optimization_status = "skipped"
+            state.schedule_optimization_history.append(
+                ScheduleOptimizationRecord(
+                    attempt=state.schedule_optimization_count,
+                    status="skipped",
+                    reason="Schedule optimization attempt budget is exhausted",
+                    baseline_fingerprint=current_fingerprint,
+                    baseline_cost=report.optimization_cost,
+                )
+            )
+            self._record_local_schedule_action(
+                state,
+                AgentAction.OPTIMIZE_SCHEDULE,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        if not report.optimization_recommended:
+            state.schedule_optimization_status = "skipped"
+            state.schedule_optimization_history.append(
+                ScheduleOptimizationRecord(
+                    attempt=state.schedule_optimization_count,
+                    status="skipped",
+                    reason="Current schedule fits within the daily time window",
+                    baseline_fingerprint=current_fingerprint,
+                    baseline_cost=report.optimization_cost,
+                )
+            )
+            self._record_local_schedule_action(
+                state,
+                AgentAction.OPTIMIZE_SCHEDULE,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        candidate = self.schedule_optimizer.optimize(
+            state.request,
+            state.trip_plan,
+            report,
+        )
+        if candidate is None:
+            state.schedule_optimization_status = "skipped"
+            state.schedule_optimization_history.append(
+                ScheduleOptimizationRecord(
+                    attempt=state.schedule_optimization_count,
+                    status="skipped",
+                    reason="No lower-cost bounded cross-day candidate was found",
+                    baseline_fingerprint=current_fingerprint,
+                    baseline_cost=report.optimization_cost,
+                )
+            )
+            self._record_local_schedule_action(
+                state,
+                AgentAction.OPTIMIZE_SCHEDULE,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        if state.route_quality_report is None:
+            raise ValueError("Baseline route quality is required for schedule optimization")
+        state.schedule_optimization_baseline_plan = state.trip_plan.model_copy(deep=True)
+        state.schedule_optimization_baseline_routes = deepcopy(state.route_estimates)
+        state.schedule_optimization_baseline_route_quality = (
+            state.route_quality_report.model_copy(deep=True)
+        )
+        state.schedule_optimization_baseline_quality = report.model_copy(deep=True)
+        state.schedule_optimization_baseline_fingerprint = current_fingerprint
+        state.schedule_optimization_candidate = candidate.model_copy(deep=True)
+        state.trip_plan = candidate.plan.model_copy(deep=True)
+        state.schedule_optimization_count += 1
+        state.schedule_optimization_status = "candidate_pending"
+        # Route-order optimization has already terminated. Clearing only route
+        # snapshots prevents the moved plan from re-entering that earlier phase.
+        state.route_estimates = None
+        state.route_plan_fingerprint = None
+        state.route_quality_report = None
+        state.route_quality_plan_fingerprint = None
+        state.schedule_quality_report = None
+        state.schedule_quality_plan_fingerprint = None
+        self._clear_constraint_analysis(state, reset_optimization_count=False)
+        state.last_validation_result = None
+        self._record_local_schedule_action(
+            state,
+            AgentAction.OPTIMIZE_SCHEDULE,
+            reason,
+            lifetime_attempt,
+        )
+
+    def _refresh_constraint_report(self, state: AgentState):
+        """Evaluate current plan feasibility from persisted facts and timeline."""
+
+        if state.trip_plan is None or state.schedule_quality_report is None:
+            raise ValueError("Trip plan and schedule report are required for constraint evaluation")
+        current_fingerprint = constraint_plan_fingerprint(state.request, state.trip_plan)
+        report = self.constraint_evaluator.evaluate(
+            state.request,
+            state.trip_plan,
+            state.schedule_quality_report,
+            attractions=state.attractions,
+            weather=state.weather,
+        )
+        if report.plan_fingerprint != current_fingerprint:
+            raise ValueError("Constraint report does not match the current trip plan")
+        state.constraint_report = report
+        state.constraint_plan_fingerprint = current_fingerprint
+        if (
+            state.constraint_optimization_status == "not_started"
+            and not report.optimization_recommended
+        ):
+            state.constraint_optimization_status = "skipped"
+        return report
+
+    @staticmethod
+    def _constraint_improvement_percent(before, after) -> float:
+        if before.optimization_cost <= 0:
+            return 0.0
+        return round(
+            (before.optimization_cost - after.optimization_cost)
+            / before.optimization_cost
+            * 100.0,
+            2,
+        )
+
+    @staticmethod
+    def _clear_constraint_optimization_baseline(state: AgentState) -> None:
+        state.constraint_optimization_candidate = None
+        state.constraint_optimization_baseline_plan = None
+        state.constraint_optimization_baseline_routes = None
+        state.constraint_optimization_baseline_route_quality = None
+        state.constraint_optimization_baseline_schedule = None
+        state.constraint_optimization_baseline_report = None
+        state.constraint_optimization_baseline_fingerprint = None
+
+    @staticmethod
+    def _record_local_constraint_action(
+        state: AgentState,
+        action: AgentAction,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        state.action_history.append(
+            ActionRecord(
+                step=state.current_step,
+                action=action,
+                reason=reason,
+                attempt=lifetime_attempt,
+                success=True,
+            )
+        )
+
+    def _evaluate_constraints(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        """Evaluate real-world execution constraints without external calls."""
+
+        self._refresh_constraint_report(state)
+        self._record_local_constraint_action(
+            state,
+            AgentAction.EVALUATE_CONSTRAINTS,
+            reason,
+            lifetime_attempt,
+        )
+
+    def _optimize_constraints(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        """Propose or verify one bounded deterministic conflict-resolution candidate."""
+
+        if state.trip_plan is None or state.route_estimates is None:
+            raise ValueError("Trip plan and route estimates are required for constraint optimization")
+        if state.route_quality_report is None or state.schedule_quality_report is None:
+            raise ValueError("Route and schedule quality are required for constraint optimization")
+
+        current_fingerprint = constraint_plan_fingerprint(state.request, state.trip_plan)
+        report = state.constraint_report
+        if report is None or state.constraint_plan_fingerprint != current_fingerprint:
+            report = self._refresh_constraint_report(state)
+
+        if state.constraint_optimization_status == "candidate_pending":
+            baseline_plan = state.constraint_optimization_baseline_plan
+            baseline_routes = state.constraint_optimization_baseline_routes
+            baseline_route_quality = state.constraint_optimization_baseline_route_quality
+            baseline_schedule = state.constraint_optimization_baseline_schedule
+            baseline_report = state.constraint_optimization_baseline_report
+            baseline_fingerprint = state.constraint_optimization_baseline_fingerprint
+            candidate = state.constraint_optimization_candidate
+            if any(
+                item is None
+                for item in (
+                    baseline_plan,
+                    baseline_routes,
+                    baseline_route_quality,
+                    baseline_schedule,
+                    baseline_report,
+                    baseline_fingerprint,
+                    candidate,
+                )
+            ):
+                raise ValueError("Pending constraint optimization is missing baseline data")
+
+            assert baseline_plan is not None
+            assert baseline_route_quality is not None
+            assert baseline_schedule is not None
+            assert baseline_report is not None
+            assert baseline_fingerprint is not None
+            assert candidate is not None
+            actual_improvement = self._constraint_improvement_percent(
+                baseline_report,
+                report,
+            )
+            route_quality_safe = (
+                state.route_quality_report.unavailable_legs
+                <= baseline_route_quality.unavailable_legs
+                and state.route_quality_report.excessive_duration_legs
+                <= baseline_route_quality.excessive_duration_legs
+            )
+            schedule_safe = (
+                state.schedule_quality_report.total_overtime_minutes
+                <= baseline_schedule.total_overtime_minutes
+                and state.schedule_quality_report.infeasible_days
+                <= baseline_schedule.infeasible_days
+                and state.schedule_quality_report.fallback_route_legs
+                <= baseline_schedule.fallback_route_legs
+            )
+            accepted = (
+                report.optimization_cost < baseline_report.optimization_cost
+                and actual_improvement
+                >= self.constraint_optimization_min_improvement_percent
+                and report.error_count <= baseline_report.error_count
+                and route_quality_safe
+                and schedule_safe
+            )
+            candidate_fingerprint = current_fingerprint
+            if accepted:
+                status = "accepted"
+                outcome_reason = (
+                    "Candidate accepted after verified constraint cost improved by "
+                    f"{actual_improvement:.2f}%"
+                )
+            else:
+                status = "reverted"
+                outcome_reason = (
+                    "Candidate reverted because verified constraint improvement was below "
+                    f"{self.constraint_optimization_min_improvement_percent:.2f}% "
+                    "or route/schedule hard metrics worsened"
+                )
+                route_fingerprint = plan_route_fingerprint(state.request, baseline_plan)
+                state.trip_plan = baseline_plan.model_copy(deep=True)
+                state.route_estimates = deepcopy(baseline_routes)
+                state.route_plan_fingerprint = route_fingerprint
+                state.route_quality_report = baseline_route_quality.model_copy(deep=True)
+                state.route_quality_plan_fingerprint = route_fingerprint
+                state.schedule_quality_report = baseline_schedule.model_copy(deep=True)
+                state.schedule_quality_plan_fingerprint = route_fingerprint
+                state.constraint_report = baseline_report.model_copy(deep=True)
+                state.constraint_plan_fingerprint = baseline_fingerprint
+
+            state.constraint_optimization_history.append(
+                ConstraintOptimizationRecord(
+                    attempt=state.constraint_optimization_count,
+                    status=status,
+                    reason=outcome_reason,
+                    baseline_fingerprint=baseline_fingerprint,
+                    candidate_fingerprint=candidate_fingerprint,
+                    strategy=candidate.strategy,
+                    source_day_index=candidate.source_day_index,
+                    target_day_index=candidate.target_day_index,
+                    moved_attraction_name=candidate.moved_attraction_name,
+                    approximate_improvement_percent=(
+                        candidate.approximate_improvement_percent
+                    ),
+                    actual_improvement_percent=actual_improvement,
+                    baseline_cost=baseline_report.optimization_cost,
+                    candidate_cost=report.optimization_cost,
+                )
+            )
+            state.constraint_optimization_status = "completed"
+            self._clear_constraint_optimization_baseline(state)
+            state.last_validation_result = None
+            self._record_local_constraint_action(
+                state,
+                AgentAction.OPTIMIZE_CONSTRAINTS,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        max_attempts = state.execution_budget.max_constraint_optimization_attempts
+        if state.constraint_optimization_count >= max_attempts:
+            state.constraint_optimization_status = "skipped"
+            state.constraint_optimization_history.append(
+                ConstraintOptimizationRecord(
+                    attempt=state.constraint_optimization_count,
+                    status="skipped",
+                    reason="Constraint optimization attempt budget is exhausted",
+                    baseline_fingerprint=current_fingerprint,
+                    baseline_cost=report.optimization_cost,
+                )
+            )
+            self._record_local_constraint_action(
+                state,
+                AgentAction.OPTIMIZE_CONSTRAINTS,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        if not report.optimization_recommended:
+            state.constraint_optimization_status = "skipped"
+            state.constraint_optimization_history.append(
+                ConstraintOptimizationRecord(
+                    attempt=state.constraint_optimization_count,
+                    status="skipped",
+                    reason="Current plan has no repairable execution constraint",
+                    baseline_fingerprint=current_fingerprint,
+                    baseline_cost=report.optimization_cost,
+                )
+            )
+            self._record_local_constraint_action(
+                state,
+                AgentAction.OPTIMIZE_CONSTRAINTS,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        candidate = self.constraint_optimizer.optimize(
+            state.request,
+            state.trip_plan,
+            report,
+            attractions=state.attractions,
+            weather=state.weather,
+        )
+        if candidate is None:
+            state.constraint_optimization_status = "skipped"
+            state.constraint_optimization_history.append(
+                ConstraintOptimizationRecord(
+                    attempt=state.constraint_optimization_count,
+                    status="skipped",
+                    reason="No lower-cost bounded constraint candidate was found",
+                    baseline_fingerprint=current_fingerprint,
+                    baseline_cost=report.optimization_cost,
+                )
+            )
+            self._record_local_constraint_action(
+                state,
+                AgentAction.OPTIMIZE_CONSTRAINTS,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        state.constraint_optimization_baseline_plan = state.trip_plan.model_copy(deep=True)
+        state.constraint_optimization_baseline_routes = deepcopy(state.route_estimates)
+        state.constraint_optimization_baseline_route_quality = (
+            state.route_quality_report.model_copy(deep=True)
+        )
+        state.constraint_optimization_baseline_schedule = (
+            state.schedule_quality_report.model_copy(deep=True)
+        )
+        state.constraint_optimization_baseline_report = report.model_copy(deep=True)
+        state.constraint_optimization_baseline_fingerprint = current_fingerprint
+        state.constraint_optimization_candidate = candidate.model_copy(deep=True)
+        state.trip_plan = candidate.plan.model_copy(deep=True)
+        state.constraint_optimization_count += 1
+        state.constraint_optimization_status = "candidate_pending"
+        # Real Amap routes and the timeline must be rebuilt before acceptance.
+        state.route_estimates = None
+        state.route_plan_fingerprint = None
+        state.route_quality_report = None
+        state.route_quality_plan_fingerprint = None
+        state.schedule_quality_report = None
+        state.schedule_quality_plan_fingerprint = None
+        state.constraint_report = None
+        state.constraint_plan_fingerprint = None
+        state.last_validation_result = None
+        self._record_local_constraint_action(
+            state,
+            AgentAction.OPTIMIZE_CONSTRAINTS,
+            reason,
+            lifetime_attempt,
+        )
+
     def _validate_plan(
         self,
         state: AgentState,
@@ -370,6 +1398,8 @@ class TripOrchestrator:
             weather=state.weather,
             hotels=state.hotels,
             route_estimates=state.route_estimates,
+            schedule_quality_report=state.schedule_quality_report,
+            constraint_report=state.constraint_report,
         )
         # 步骤 2：保存最新结果，同时追加历史记录，便于比较每次修复效果。
         state.last_validation_result = result
@@ -499,8 +1529,8 @@ class TripOrchestrator:
             }
         raise ValueError(f"action has no registered tool payload: {action.value}")
 
-    @staticmethod
     def _apply_tool_result(
+        self,
         state: AgentState,
         action: AgentAction,
         result: ActionResult,
@@ -524,9 +1554,10 @@ class TripOrchestrator:
             return
         if action is AgentAction.GENERATE_PLAN:
             state.trip_plan = TripPlan.model_validate(result.data)
-            state.route_estimates = None
-            state.route_plan_fingerprint = None
-            state.last_validation_result = None
+            self._clear_route_analysis(
+                state,
+                reset_optimization_count=True,
+            )
             return
         if action is AgentAction.ESTIMATE_ROUTES:
             if state.trip_plan is None:
@@ -537,13 +1568,39 @@ class TripOrchestrator:
                 raise ValueError("Route estimates do not match the current trip plan")
             state.route_estimates = route_result.model_dump(mode="json")
             state.route_plan_fingerprint = route_result.plan_fingerprint
+            state.route_quality_report = evaluate_route_quality(
+                state.trip_plan,
+                route_result,
+            )
+            state.route_quality_plan_fingerprint = route_result.plan_fingerprint
+            if (
+                state.route_optimization_status == "not_started"
+                and (
+                    not state.route_quality_report.optimization_recommended
+                    or state.route_optimization_count
+                    >= state.execution_budget.max_route_optimization_attempts
+                )
+            ):
+                state.route_optimization_status = "skipped"
+            state.schedule_quality_report = self.schedule_evaluator.evaluate(
+                state.request,
+                state.trip_plan,
+                route_result,
+            )
+            state.schedule_quality_plan_fingerprint = route_result.plan_fingerprint
+            if (
+                state.schedule_optimization_status == "not_started"
+                and not state.schedule_quality_report.optimization_recommended
+            ):
+                state.schedule_optimization_status = "skipped"
             state.last_validation_result = None
             return
         if action is AgentAction.REPAIR_PLAN:
             state.trip_plan = TripPlan.model_validate(result.data)
-            state.route_estimates = None
-            state.route_plan_fingerprint = None
-            state.last_validation_result = None
+            self._clear_route_analysis(
+                state,
+                reset_optimization_count=False,
+            )
             state.repair_count += 1
             return
         raise ValueError(f"unsupported action result: {action.value}")

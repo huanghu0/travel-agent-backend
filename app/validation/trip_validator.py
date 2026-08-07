@@ -6,8 +6,10 @@ from datetime import date, timedelta
 from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
+from app.constraints import TripConstraintReport
 from app.providers.amap.models import RouteEstimate, RouteEstimateResult
 from app.schemas.trip_schema import TripPlan, TripRequest
+from app.scheduling import ScheduleQualityReport
 from app.validation.models import (
     TripValidationResult,
     ValidationIssue,
@@ -27,6 +29,8 @@ class TripPlanValidator:
         weather: dict[str, Any] | None = None,
         hotels: dict[str, Any] | None = None,
         route_estimates: dict[str, Any] | RouteEstimateResult | None = None,
+        schedule_quality_report: ScheduleQualityReport | dict | None = None,
+        constraint_report: TripConstraintReport | dict | None = None,
     ) -> TripValidationResult:
         issues: list[ValidationIssue] = []
         # 步骤 1：先校验用户请求本身。请求日期冲突属于不可由 LLM 修复的问题。
@@ -84,6 +88,8 @@ class TripPlanValidator:
         self._validate_budget(plan, issues)
         self._validate_source_consistency(plan, attractions, hotels, issues)
         self._validate_route_distances(plan, issues, route_estimates)
+        self._validate_schedule_capacity(issues, schedule_quality_report)
+        self._validate_execution_constraints(issues, constraint_report)
 
         if not plan.overall_suggestions.strip():
             self._error(
@@ -483,6 +489,78 @@ class TripPlanValidator:
                             "source": "haversine",
                         },
                     )
+
+    @staticmethod
+    def _validate_schedule_capacity(
+        issues: list[ValidationIssue],
+        schedule_quality_report: ScheduleQualityReport | dict | None,
+    ) -> None:
+        """Expose unresolved daily overtime to the existing repair loop."""
+
+        if schedule_quality_report is None:
+            return
+        try:
+            report = (
+                schedule_quality_report
+                if isinstance(schedule_quality_report, ScheduleQualityReport)
+                else ScheduleQualityReport.model_validate(schedule_quality_report)
+            )
+        except Exception:
+            return
+        for day in report.days:
+            if day.overtime_minutes <= 0:
+                continue
+            TripPlanValidator._error(
+                issues,
+                code="schedule.daily_overtime",
+                path=f"days[{day.day_index}].attractions",
+                message=(
+                    f"第 {day.day_index + 1} 天的日程超出可用时间 {day.overtime_minutes} 分钟"
+                ),
+                repair_hint=(
+                    "减少当日景点、缩短游览时间，或将部分景点移动到其他日期"
+                ),
+                expected={"overtime_minutes": 0},
+                actual={
+                    "overtime_minutes": day.overtime_minutes,
+                    "total_required_minutes": day.total_required_minutes,
+                    "available_minutes": day.available_minutes,
+                },
+            )
+
+    @staticmethod
+    def _validate_execution_constraints(
+        issues: list[ValidationIssue],
+        constraint_report: TripConstraintReport | dict | None,
+    ) -> None:
+        """Expose unresolved feasibility conflicts to the existing repair loop."""
+
+        if constraint_report is None:
+            return
+        try:
+            report = (
+                constraint_report
+                if isinstance(constraint_report, TripConstraintReport)
+                else TripConstraintReport.model_validate(constraint_report)
+            )
+        except Exception:
+            return
+        for item in report.issues:
+            issue = ValidationIssue(
+                code=item.code,
+                severity=(
+                    ValidationSeverity.ERROR
+                    if item.severity == "error"
+                    else ValidationSeverity.WARNING
+                ),
+                path=item.path,
+                message=item.message,
+                repair_hint=item.repair_hint,
+                repairable=item.repairable,
+                expected=item.expected,
+                actual=item.actual,
+            )
+            issues.append(issue)
 
     @staticmethod
     def _route_estimate_lookup(

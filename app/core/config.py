@@ -55,12 +55,66 @@ class Settings:
     AGENT_MEMORY_DB_PATH: str = _env(
         "AGENT_MEMORY_DB_PATH", "data/agent_memory.db"
     ) or "data/agent_memory.db"
-    AGENT_MAX_STEPS: int = int(_env("AGENT_MAX_STEPS", "16") or "16")
+    AGENT_MAX_STEPS: int = int(_env("AGENT_MAX_STEPS", "24") or "24")
     AGENT_MAX_ATTEMPTS_PER_ACTION: int = int(
         _env("AGENT_MAX_ATTEMPTS_PER_ACTION", "2") or "2"
     )
     AGENT_MAX_REPAIR_ATTEMPTS: int = int(
         _env("AGENT_MAX_REPAIR_ATTEMPTS", "2") or "2"
+    )
+
+    AGENT_MAX_ROUTE_OPTIMIZATION_ATTEMPTS: int = int(
+        _env("AGENT_MAX_ROUTE_OPTIMIZATION_ATTEMPTS", "1") or "1"
+    )
+    ROUTE_OPTIMIZATION_MAX_CANDIDATES: int = int(
+        _env("ROUTE_OPTIMIZATION_MAX_CANDIDATES", "6") or "6"
+    )
+    ROUTE_OPTIMIZATION_MIN_IMPROVEMENT_PERCENT: float = float(
+        _env("ROUTE_OPTIMIZATION_MIN_IMPROVEMENT_PERCENT", "10") or "10"
+    )
+
+    AGENT_MAX_SCHEDULE_OPTIMIZATION_ATTEMPTS: int = int(
+        _env("AGENT_MAX_SCHEDULE_OPTIMIZATION_ATTEMPTS", "1") or "1"
+    )
+    SCHEDULE_OPTIMIZATION_MAX_CANDIDATES: int = int(
+        _env("SCHEDULE_OPTIMIZATION_MAX_CANDIDATES", "6") or "6"
+    )
+    SCHEDULE_OPTIMIZATION_MIN_IMPROVEMENT_PERCENT: float = float(
+        _env("SCHEDULE_OPTIMIZATION_MIN_IMPROVEMENT_PERCENT", "10") or "10"
+    )
+    SCHEDULE_DEFAULT_START_TIME: str = (
+        _env("SCHEDULE_DEFAULT_START_TIME", "09:00") or "09:00"
+    )
+    SCHEDULE_DEFAULT_END_TIME: str = (
+        _env("SCHEDULE_DEFAULT_END_TIME", "18:00") or "18:00"
+    )
+    SCHEDULE_LUNCH_DURATION_MINUTES: int = int(
+        _env("SCHEDULE_LUNCH_DURATION_MINUTES", "60") or "60"
+    )
+    SCHEDULE_ROUTE_BUFFER_MINUTES: int = int(
+        _env("SCHEDULE_ROUTE_BUFFER_MINUTES", "10") or "10"
+    )
+    SCHEDULE_ATTRACTION_BUFFER_MINUTES: int = int(
+        _env("SCHEDULE_ATTRACTION_BUFFER_MINUTES", "10") or "10"
+    )
+
+    AGENT_MAX_CONSTRAINT_OPTIMIZATION_ATTEMPTS: int = int(
+        _env("AGENT_MAX_CONSTRAINT_OPTIMIZATION_ATTEMPTS", "1") or "1"
+    )
+    CONSTRAINT_OPTIMIZATION_MAX_CANDIDATES: int = int(
+        _env("CONSTRAINT_OPTIMIZATION_MAX_CANDIDATES", "8") or "8"
+    )
+    CONSTRAINT_OPTIMIZATION_MIN_IMPROVEMENT_PERCENT: float = float(
+        _env("CONSTRAINT_OPTIMIZATION_MIN_IMPROVEMENT_PERCENT", "10") or "10"
+    )
+    CONSTRAINT_LUNCH_WINDOW_START: str = (
+        _env("CONSTRAINT_LUNCH_WINDOW_START", "11:30") or "11:30"
+    )
+    CONSTRAINT_LUNCH_WINDOW_END: str = (
+        _env("CONSTRAINT_LUNCH_WINDOW_END", "14:00") or "14:00"
+    )
+    CONSTRAINT_DAILY_ATTRACTION_SOFT_LIMIT: int = int(
+        _env("CONSTRAINT_DAILY_ATTRACTION_SOFT_LIMIT", "5") or "5"
     )
 
     AGENT_MAX_DURATION_SECONDS: float = float(

@@ -9,12 +9,19 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.constraints import (
+    ConstraintOptimizationCandidate,
+    ConstraintOptimizationStatus,
+    TripConstraintReport,
+)
+from app.routing import RouteOptimizationCandidate, RouteQualityReport
 from app.schemas.trip_schema import TripPlan, TripRequest
+from app.scheduling import ScheduleOptimizationCandidate, ScheduleQualityReport
 from app.tools.models import ActionResult, ToolErrorType
 from app.validation import TripValidationResult
 
 
-CURRENT_AGENT_STATE_VERSION = 5
+CURRENT_AGENT_STATE_VERSION = 8
 
 
 def utc_now() -> datetime:
@@ -26,11 +33,14 @@ def utc_now() -> datetime:
 class ExecutionBudget(BaseModel):
     """Persisted lifetime limits for one agent session."""
 
-    max_steps: int = Field(default=16, ge=1)
+    max_steps: int = Field(default=24, ge=1)
     max_duration_seconds: float = Field(default=180.0, gt=0)
     max_tool_calls: int = Field(default=15, ge=0)
     max_llm_calls: int = Field(default=6, ge=0)
     max_repair_attempts: int = Field(default=2, ge=0)
+    max_route_optimization_attempts: int = Field(default=1, ge=0)
+    max_schedule_optimization_attempts: int = Field(default=1, ge=0)
+    max_constraint_optimization_attempts: int = Field(default=1, ge=0)
 
 
 class AgentAction(str, Enum):
@@ -42,6 +52,11 @@ class AgentAction(str, Enum):
     GENERATE_PLAN = "generate_plan"
     VALIDATE_PLAN = "validate_plan"
     ESTIMATE_ROUTES = "estimate_routes"
+    OPTIMIZE_ROUTES = "optimize_routes"
+    EVALUATE_SCHEDULE = "evaluate_schedule"
+    OPTIMIZE_SCHEDULE = "optimize_schedule"
+    EVALUATE_CONSTRAINTS = "evaluate_constraints"
+    OPTIMIZE_CONSTRAINTS = "optimize_constraints"
     REPAIR_PLAN = "repair_plan"
     FINISH = "finish"
 
@@ -78,6 +93,77 @@ class ActionRecord(BaseModel):
     recorded_at: datetime = Field(default_factory=utc_now)
 
 
+RouteOptimizationStatus = Literal[
+    "not_started",
+    "candidate_pending",
+    "completed",
+    "skipped",
+]
+
+
+class RouteOptimizationRecord(BaseModel):
+    """Audit record for one bounded route-order optimization attempt."""
+
+    attempt: int = Field(ge=0)
+    status: Literal["accepted", "reverted", "skipped"]
+    reason: str
+    baseline_fingerprint: str | None = None
+    candidate_fingerprint: str | None = None
+    strategy: str | None = None
+    changed_day_index: int | None = Field(default=None, ge=0)
+    approximate_improvement_percent: float = 0.0
+    actual_improvement_percent: float = 0.0
+    baseline_cost: float | None = Field(default=None, ge=0)
+    candidate_cost: float | None = Field(default=None, ge=0)
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
+ScheduleOptimizationStatus = Literal[
+    "not_started",
+    "candidate_pending",
+    "completed",
+    "skipped",
+]
+
+
+class ScheduleOptimizationRecord(BaseModel):
+    """Audit record for one bounded cross-day schedule optimization attempt."""
+
+    attempt: int = Field(ge=0)
+    status: Literal["accepted", "reverted", "skipped"]
+    reason: str
+    baseline_fingerprint: str | None = None
+    candidate_fingerprint: str | None = None
+    strategy: str | None = None
+    source_day_index: int | None = Field(default=None, ge=0)
+    target_day_index: int | None = Field(default=None, ge=0)
+    moved_attraction_name: str | None = None
+    approximate_improvement_percent: float = 0.0
+    actual_improvement_percent: float = 0.0
+    baseline_cost: float | None = Field(default=None, ge=0)
+    candidate_cost: float | None = Field(default=None, ge=0)
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
+class ConstraintOptimizationRecord(BaseModel):
+    """Audit record for one bounded feasibility optimization attempt."""
+
+    attempt: int = Field(ge=0)
+    status: Literal["accepted", "reverted", "skipped"]
+    reason: str
+    baseline_fingerprint: str | None = None
+    candidate_fingerprint: str | None = None
+    strategy: str | None = None
+    source_day_index: int | None = Field(default=None, ge=0)
+    target_day_index: int | None = Field(default=None, ge=0)
+    moved_attraction_name: str | None = None
+    approximate_improvement_percent: float = 0.0
+    actual_improvement_percent: float = 0.0
+    baseline_cost: float | None = Field(default=None, ge=0)
+    candidate_cost: float | None = Field(default=None, ge=0)
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
 class AgentState(BaseModel):
     """一次旅行规划的完整可变状态；该对象会整体写入 SQLite 检查点。"""
 
@@ -87,7 +173,7 @@ class AgentState(BaseModel):
     request: TripRequest
     status: AgentStatus = "pending"
     current_step: int = 0
-    max_steps: int = 16
+    max_steps: int = 24
     max_repair_attempts: int = Field(default=2, ge=0)
     repair_count: int = Field(default=0, ge=0)
     finished: bool = False
@@ -112,6 +198,45 @@ class AgentState(BaseModel):
     trip_plan: TripPlan | None = None
     route_estimates: dict[str, Any] | None = None
     route_plan_fingerprint: str | None = None
+    route_quality_report: RouteQualityReport | None = None
+    route_quality_plan_fingerprint: str | None = None
+    route_optimization_count: int = Field(default=0, ge=0)
+    route_optimization_status: RouteOptimizationStatus = "not_started"
+    route_optimization_candidate: RouteOptimizationCandidate | None = None
+    route_optimization_baseline_plan: TripPlan | None = None
+    route_optimization_baseline_routes: dict[str, Any] | None = None
+    route_optimization_baseline_quality: RouteQualityReport | None = None
+    route_optimization_baseline_fingerprint: str | None = None
+    route_optimization_history: list[RouteOptimizationRecord] = Field(
+        default_factory=list
+    )
+    schedule_quality_report: ScheduleQualityReport | None = None
+    schedule_quality_plan_fingerprint: str | None = None
+    schedule_optimization_count: int = Field(default=0, ge=0)
+    schedule_optimization_status: ScheduleOptimizationStatus = "not_started"
+    schedule_optimization_candidate: ScheduleOptimizationCandidate | None = None
+    schedule_optimization_baseline_plan: TripPlan | None = None
+    schedule_optimization_baseline_routes: dict[str, Any] | None = None
+    schedule_optimization_baseline_route_quality: RouteQualityReport | None = None
+    schedule_optimization_baseline_quality: ScheduleQualityReport | None = None
+    schedule_optimization_baseline_fingerprint: str | None = None
+    schedule_optimization_history: list[ScheduleOptimizationRecord] = Field(
+        default_factory=list
+    )
+    constraint_report: TripConstraintReport | None = None
+    constraint_plan_fingerprint: str | None = None
+    constraint_optimization_count: int = Field(default=0, ge=0)
+    constraint_optimization_status: ConstraintOptimizationStatus = "not_started"
+    constraint_optimization_candidate: ConstraintOptimizationCandidate | None = None
+    constraint_optimization_baseline_plan: TripPlan | None = None
+    constraint_optimization_baseline_routes: dict[str, Any] | None = None
+    constraint_optimization_baseline_route_quality: RouteQualityReport | None = None
+    constraint_optimization_baseline_schedule: ScheduleQualityReport | None = None
+    constraint_optimization_baseline_report: TripConstraintReport | None = None
+    constraint_optimization_baseline_fingerprint: str | None = None
+    constraint_optimization_history: list[ConstraintOptimizationRecord] = Field(
+        default_factory=list
+    )
     last_action_result: ActionResult | None = None
     last_validation_result: TripValidationResult | None = None
     validation_history: list[TripValidationResult] = Field(default_factory=list)
@@ -145,8 +270,11 @@ class AgentState(BaseModel):
         cls,
         request: TripRequest,
         *,
-        max_steps: int = 16,
+        max_steps: int = 24,
         max_repair_attempts: int = 2,
+        max_route_optimization_attempts: int = 1,
+        max_schedule_optimization_attempts: int = 1,
+        max_constraint_optimization_attempts: int = 1,
         max_duration_seconds: float = 180.0,
         max_tool_calls: int = 15,
         max_llm_calls: int = 6,
@@ -160,6 +288,9 @@ class AgentState(BaseModel):
                 max_tool_calls=max_tool_calls,
                 max_llm_calls=max_llm_calls,
                 max_repair_attempts=max_repair_attempts,
+                max_route_optimization_attempts=max_route_optimization_attempts,
+                max_schedule_optimization_attempts=max_schedule_optimization_attempts,
+                max_constraint_optimization_attempts=max_constraint_optimization_attempts,
             )
         now = utc_now()
         values: dict[str, Any] = {
