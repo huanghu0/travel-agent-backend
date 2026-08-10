@@ -93,6 +93,11 @@ class WeatherSearchResult(BaseModel):
 
 
 RouteMode = Literal["walking", "driving", "transit"]
+RouteLegType = Literal[
+    "hotel_departure",
+    "between_attractions",
+    "hotel_return",
+]
 
 
 class RoutePoint(BaseModel):
@@ -109,6 +114,7 @@ class RouteLegRequest(BaseModel):
 
     day_index: int = Field(ge=0)
     leg_index: int = Field(ge=0)
+    leg_type: RouteLegType = "between_attractions"
     date: str = ""
     origin: RoutePoint
     destination: RoutePoint
@@ -121,6 +127,7 @@ class RouteEstimate(BaseModel):
     provider: Literal["amap"] = "amap"
     day_index: int = Field(ge=0)
     leg_index: int = Field(ge=0)
+    leg_type: RouteLegType = "between_attractions"
     date: str = ""
     origin_name: str
     destination_name: str

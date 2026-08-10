@@ -70,6 +70,7 @@ class ConstraintOptimizationCandidate(BaseModel):
     target_day_index: int = Field(ge=0)
     moved_attraction_name: str
     target_insertion_index: int = Field(ge=0)
+    removed_attraction_names: list[str] = Field(default_factory=list)
     strategy: str
     baseline_cost: float = Field(ge=0)
     candidate_cost: float = Field(ge=0)

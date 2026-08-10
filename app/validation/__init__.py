@@ -5,10 +5,13 @@ from app.validation.models import (
     ValidationIssue,
     ValidationSeverity,
 )
+from app.validation.plan_normalizer import attraction_identity, remove_duplicate_attractions
 from app.validation.trip_validator import TripPlanValidator
 
 __all__ = [
     "TripPlanValidator",
+    "attraction_identity",
+    "remove_duplicate_attractions",
     "TripValidationResult",
     "ValidationIssue",
     "ValidationSeverity",

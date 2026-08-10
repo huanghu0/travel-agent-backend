@@ -302,6 +302,7 @@ def normalize_route(
         return RouteEstimate(
             day_index=leg.day_index,
             leg_index=leg.leg_index,
+            leg_type=leg.leg_type,
             date=leg.date,
             origin_name=leg.origin.name,
             destination_name=leg.destination.name,
@@ -321,6 +322,7 @@ def normalize_route(
         return RouteEstimate(
             day_index=leg.day_index,
             leg_index=leg.leg_index,
+            leg_type=leg.leg_type,
             date=leg.date,
             origin_name=leg.origin.name,
             destination_name=leg.destination.name,
@@ -333,6 +335,7 @@ def normalize_route(
     return RouteEstimate(
         day_index=leg.day_index,
         leg_index=leg.leg_index,
+        leg_type=leg.leg_type,
         date=leg.date,
         origin_name=leg.origin.name,
         destination_name=leg.destination.name,

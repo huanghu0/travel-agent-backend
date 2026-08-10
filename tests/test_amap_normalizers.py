@@ -137,11 +137,12 @@ class AmapNormalizerTests(unittest.TestCase):
 
 
     @staticmethod
-    def _route_leg(mode="driving"):
+    def _route_leg(mode="driving", leg_type="between_attractions"):
         return RouteLegRequest.model_validate(
             {
                 "day_index": 0,
                 "leg_index": 0,
+                "leg_type": leg_type,
                 "date": "2026-08-10",
                 "origin": {
                     "name": "A",
@@ -189,10 +190,11 @@ class AmapNormalizerTests(unittest.TestCase):
                             ]
                         }
                     },
-                    leg=self._route_leg(mode),
+                    leg=self._route_leg(mode, "hotel_departure"),
                     mode=mode,
                 )
                 self.assertTrue(route.available)
+                self.assertEqual(route.leg_type, "hotel_departure")
                 self.assertEqual(route.distance_meters, 1234)
                 self.assertEqual(route.duration_seconds, 900)
 

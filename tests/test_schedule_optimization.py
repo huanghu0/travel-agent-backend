@@ -161,6 +161,27 @@ class ScheduleTimelineEvaluatorTests(unittest.TestCase):
         self.assertLess(lunch_index, second_attraction_index)
         self.assertEqual(report.days[0].meal_minutes, 60)
 
+    def test_lunch_can_start_at_configured_window_before_next_attraction(self):
+        plan = make_plan(("A", "B"), (), visit_duration=150)
+        report = ScheduleTimelineEvaluator(lunch_window_start="11:30").evaluate(
+            make_request(),
+            plan,
+            make_routes(plan, duration_seconds=600),
+        )
+
+        meal = next(item for item in report.days[0].timeline if item.item_type == "meal")
+        self.assertGreaterEqual(meal.start_time, "11:30")
+        self.assertLess(meal.start_time, "13:30")
+        second = next(
+            item
+            for item in report.days[0].timeline
+            if item.item_type == "attraction" and item.name == "B"
+        )
+        self.assertLess(
+            report.days[0].timeline.index(meal),
+            report.days[0].timeline.index(second),
+        )
+
     def test_duration_categories_and_overtime_are_aggregated(self):
         plan = make_plan(("A", "B", "C"), (), visit_duration=180)
         report = ScheduleTimelineEvaluator().evaluate(
@@ -264,15 +285,47 @@ class DeterministicScheduleOptimizerTests(unittest.TestCase):
 
         self.assertEqual(first.model_dump(), second.model_dump())
 
-    def test_optimizer_returns_none_without_another_day(self):
+    def test_optimizer_sheds_load_when_no_target_day_can_accept_it(self):
         request = make_request()
         plan = make_plan()
         plan.days = [plan.days[0]]
-        report = ScheduleTimelineEvaluator().evaluate(request, plan, None)
+        original = plan.model_dump()
+        evaluator = ScheduleTimelineEvaluator()
+        report = evaluator.evaluate(request, plan, None)
 
-        candidate = DeterministicScheduleOptimizer().optimize(request, plan, report)
+        candidate = DeterministicScheduleOptimizer(
+            evaluator=evaluator,
+            max_candidates=6,
+        ).optimize(request, plan, report)
 
-        self.assertIsNone(candidate)
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        self.assertEqual(plan.model_dump(), original)
+        self.assertEqual(candidate.strategy, "remove_attractions_from_overloaded_days")
+        self.assertIsNone(candidate.target_day_index)
+        self.assertTrue(candidate.removed_attraction_names)
+        self.assertLess(
+            evaluator.evaluate(request, candidate.plan, None).optimization_cost,
+            report.optimization_cost,
+        )
+
+    def test_optimizer_removes_multiple_attractions_until_overload_is_resolved(self):
+        request = make_request()
+        plan = make_plan(("A", "B", "C"), (), visit_duration=360)
+        plan.days = [plan.days[0]]
+        evaluator = ScheduleTimelineEvaluator()
+        report = evaluator.evaluate(request, plan, None)
+        optimizer = DeterministicScheduleOptimizer(evaluator=evaluator, max_candidates=10)
+
+        candidate = optimizer.optimize(request, plan, report)
+
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        self.assertEqual(candidate.strategy, "remove_attractions_from_overloaded_days")
+        self.assertGreaterEqual(len(candidate.removed_attraction_names), 2)
+        optimized = evaluator.evaluate(request, candidate.plan, None)
+        self.assertEqual(optimized.total_overtime_minutes, 0)
+        self.assertLessEqual(candidate.considered_candidates, 10)
 
 
 class ScheduleOrchestratorTests(unittest.TestCase):

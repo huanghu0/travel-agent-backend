@@ -10,6 +10,7 @@ from app.constraints import TripConstraintReport
 from app.providers.amap.models import RouteEstimate, RouteEstimateResult
 from app.schemas.trip_schema import TripPlan, TripRequest
 from app.scheduling import ScheduleQualityReport
+from app.validation.plan_normalizer import attraction_identity
 from app.validation.models import (
     TripValidationResult,
     ValidationIssue,
@@ -160,6 +161,7 @@ class TripPlanValidator:
             )
 
         seen_dates: set[str] = set()
+        seen_attractions: dict[str, str] = {}
         for position, day in enumerate(plan.days):
             path = f"days[{position}]"
             parsed_date = self._parse_date(
@@ -262,6 +264,23 @@ class TripPlanValidator:
 
             for attraction_index, attraction in enumerate(day.attractions):
                 attraction_path = f"{path}.attractions[{attraction_index}]"
+                identity = attraction_identity(attraction)
+                first_path = seen_attractions.get(identity)
+                if first_path is not None:
+                    self._error(
+                        issues,
+                        code="attraction.duplicate_across_days",
+                        path=f"{attraction_path}.name",
+                        message="\u540c\u4e00\u666f\u70b9\u5728\u591a\u5929\u884c\u7a0b\u4e2d\u88ab\u91cd\u590d\u5b89\u6392",
+                        repair_hint="\u6bcf\u4e2a\u666f\u70b9\u53ea\u5b89\u6392\u4e00\u6b21\uff0c\u5e76\u4ece\u5019\u9009 POI \u4e2d\u9009\u62e9\u5176\u4ed6\u4e0d\u91cd\u590d\u666f\u70b9",
+                        expected="unique attraction across the trip",
+                        actual={
+                            "name": attraction.name,
+                            "first_occurrence": first_path,
+                        },
+                    )
+                else:
+                    seen_attractions[identity] = attraction_path
                 if attraction.visit_duration <= 0:
                     self._error(
                         issues,
@@ -414,7 +433,7 @@ class TripPlanValidator:
                 previous = day.attractions[attraction_index - 1]
                 current = day.attractions[attraction_index]
                 leg_index = attraction_index - 1
-                estimate = route_lookup.get((day.day_index, leg_index))
+                estimate = route_lookup.get((day.day_index, "between_attractions", leg_index))
                 path = f"days[{day_position}].attractions[{attraction_index}]"
 
                 if (
@@ -565,7 +584,7 @@ class TripPlanValidator:
     @staticmethod
     def _route_estimate_lookup(
         route_estimates: dict[str, Any] | RouteEstimateResult | None,
-    ) -> dict[tuple[int, int], RouteEstimate]:
+    ) -> dict[tuple[int, str, int], RouteEstimate]:
         if route_estimates is None:
             return {}
         try:
@@ -576,7 +595,10 @@ class TripPlanValidator:
             )
         except Exception:
             return {}
-        return {(item.day_index, item.leg_index): item for item in result.routes}
+        return {
+            (item.day_index, item.leg_type, item.leg_index): item
+            for item in result.routes
+        }
 
     @staticmethod
     def _parse_date(

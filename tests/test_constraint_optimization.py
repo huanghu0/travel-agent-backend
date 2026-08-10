@@ -265,6 +265,31 @@ class ConstraintOptimizerTests(unittest.TestCase):
         )
         self.assertEqual(after_names, before_names)
 
+    def test_optimizer_removes_attraction_when_lunch_conflict_cannot_be_moved(self):
+        request = make_request()
+        plan = make_plan(("A",), (), visit_duration=360)
+        plan.days = [plan.days[0]]
+        schedule_evaluator = ScheduleTimelineEvaluator()
+        schedule = schedule_evaluator.evaluate(request, plan, None)
+        evaluator = ConstraintEvaluator()
+        report = evaluator.evaluate(request, plan, schedule)
+        optimizer = DeterministicConstraintOptimizer(
+            evaluator=evaluator,
+            schedule_evaluator=schedule_evaluator,
+            max_candidates=8,
+        )
+
+        candidate = optimizer.optimize(request, plan, report)
+
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        self.assertEqual(
+            candidate.strategy,
+            "remove_attraction_for_constraint_feasibility",
+        )
+        self.assertEqual(candidate.removed_attraction_names, ["A"])
+        self.assertEqual(candidate.plan.days[0].attractions, [])
+
     def test_optimizer_returns_none_without_repairable_issue(self):
         request = make_request()
         plan = make_plan(("A",), ())

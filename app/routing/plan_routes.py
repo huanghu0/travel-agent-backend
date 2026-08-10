@@ -1,4 +1,4 @@
-"""Build a bounded list of adjacent-attraction route legs from the final TripPlan."""
+"""Build deterministic route legs for hotels and attractions in a trip plan."""
 
 from __future__ import annotations
 
@@ -6,8 +6,17 @@ import hashlib
 import json
 from typing import Any
 
-from app.providers.amap.models import RouteLegRequest, RouteMode, RoutePoint
-from app.schemas.trip_schema import Attraction, TripPlan, TripRequest
+from app.providers.amap.models import (
+    RouteLegRequest,
+    RouteLegType,
+    RouteMode,
+    RoutePoint,
+)
+from app.schemas.trip_schema import Attraction, Hotel, TripPlan, TripRequest
+
+
+RouteLegKey = tuple[int, RouteLegType, int]
+RoutablePlace = Attraction | Hotel
 
 
 def normalize_transportation_mode(value: str | None) -> RouteMode:
@@ -33,8 +42,22 @@ def normalize_transportation_mode(value: str | None) -> RouteMode:
     return "transit"
 
 
+def _hotel_fingerprint(hotel: Hotel | None) -> dict[str, Any] | None:
+    if hotel is None:
+        return None
+    return {
+        "name": hotel.name,
+        "longitude": (
+            round(hotel.location.longitude, 6) if hotel.location is not None else None
+        ),
+        "latitude": (
+            round(hotel.location.latitude, 6) if hotel.location is not None else None
+        ),
+    }
+
+
 def plan_route_fingerprint(request: TripRequest, plan: TripPlan) -> str:
-    """Hash only fields that affect route results, avoiding duplicate Amap calls."""
+    """Hash fields that affect hotel and attraction route results."""
 
     payload = {
         "request_transportation": request.transportation,
@@ -43,6 +66,7 @@ def plan_route_fingerprint(request: TripRequest, plan: TripPlan) -> str:
                 "date": day.date,
                 "day_index": day.day_index,
                 "transportation": day.transportation,
+                "hotel": _hotel_fingerprint(day.hotel),
                 "attractions": [
                     {
                         "name": attraction.name,
@@ -69,24 +93,24 @@ def _normalized_text(value: Any) -> str:
     return "".join(str(value or "").strip().lower().split())
 
 
-def _source_candidates(attractions: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(attractions, dict):
+def _source_candidates(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
         return []
-    candidates = attractions.get("candidates")
+    candidates = payload.get("candidates")
     if isinstance(candidates, list):
         return [item for item in candidates if isinstance(item, dict)]
     # Compatibility with checkpoints created by the retired map agents.
-    pois = attractions.get("pois")
+    pois = payload.get("pois")
     return [item for item in pois if isinstance(item, dict)] if isinstance(pois, list) else []
 
 
 def _source_indexes(
-    attractions: dict[str, Any] | None,
+    payload: dict[str, Any] | None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], str]:
     by_id: dict[str, dict[str, Any]] = {}
     by_name: dict[str, dict[str, Any]] = {}
     fallback_city_code = ""
-    for item in _source_candidates(attractions):
+    for item in _source_candidates(payload):
         poi_id = _normalized_text(item.get("poi_id", item.get("id")))
         name = _normalized_text(item.get("name"))
         if poi_id:
@@ -100,31 +124,73 @@ def _source_indexes(
 
 
 def _route_point(
-    attraction: Attraction,
+    place: RoutablePlace,
     *,
     by_id: dict[str, dict[str, Any]],
     by_name: dict[str, dict[str, Any]],
     fallback_city_code: str,
 ) -> RoutePoint:
     source = None
-    if attraction.poi_id:
-        source = by_id.get(_normalized_text(attraction.poi_id))
+    place_poi_id = str(getattr(place, "poi_id", "") or "")
+    if place_poi_id:
+        source = by_id.get(_normalized_text(place_poi_id))
     if source is None:
-        source = by_name.get(_normalized_text(attraction.name))
+        source = by_name.get(_normalized_text(place.name))
     source = source or {}
-    poi_id = attraction.poi_id or str(source.get("poi_id", source.get("id", "")) or "")
+    location = place.location
+    if location is None:
+        raise ValueError(f"Route endpoint {place.name!r} has no location")
+    poi_id = place_poi_id or str(source.get("poi_id", source.get("id", "")) or "")
     city_code = str(
         source.get("city_code", source.get("citycode", fallback_city_code)) or ""
     ).strip()
     return RoutePoint(
-        name=attraction.name,
+        name=place.name,
         location={
-            "longitude": attraction.location.longitude,
-            "latitude": attraction.location.latitude,
+            "longitude": location.longitude,
+            "latitude": location.latitude,
         },
         poi_id=poi_id,
         city_code=city_code,
     )
+
+
+def resolve_day_hotels(
+    plan: TripPlan,
+    day_position: int,
+) -> tuple[Hotel | None, Hotel | None]:
+    """Return the deterministic start and return hotel for one plan day.
+
+    The current day's hotel is preferred as the departure point. If it is absent
+    (normally the checkout day), the nearest previous hotel is reused. A return
+    leg is generated only when the current day explicitly contains a hotel.
+    """
+
+    day = plan.days[day_position]
+    current_hotel = day.hotel if day.hotel is not None and day.hotel.location is not None else None
+    start_hotel = current_hotel
+    if start_hotel is None:
+        for previous_day in reversed(plan.days[:day_position]):
+            if previous_day.hotel is not None and previous_day.hotel.location is not None:
+                start_hotel = previous_day.hotel
+                break
+    return start_hotel, current_hotel
+
+
+def expected_route_leg_keys(plan: TripPlan) -> list[RouteLegKey]:
+    """Return the exact semantic route keys expected for the complete plan timeline."""
+
+    keys: list[RouteLegKey] = []
+    for day_position, day in enumerate(plan.days):
+        day_index = day.day_index if day.day_index >= 0 else day_position
+        start_hotel, return_hotel = resolve_day_hotels(plan, day_position)
+        if day.attractions and start_hotel is not None:
+            keys.append((day_index, "hotel_departure", 0))
+        for leg_index in range(max(0, len(day.attractions) - 1)):
+            keys.append((day_index, "between_attractions", leg_index))
+        if day.attractions and return_hotel is not None:
+            keys.append((day_index, "hotel_return", 0))
+    return keys
 
 
 def build_route_legs(
@@ -132,35 +198,87 @@ def build_route_legs(
     plan: TripPlan,
     *,
     attractions: dict[str, Any] | None = None,
+    hotels: dict[str, Any] | None = None,
 ) -> list[RouteLegRequest]:
-    """Build adjacent attraction legs only; never calculate a full POI matrix."""
+    """Build bounded hotel-departure, adjacent-attraction, and hotel-return legs."""
 
-    by_id, by_name, fallback_city_code = _source_indexes(attractions)
+    attraction_by_id, attraction_by_name, attraction_city_code = _source_indexes(attractions)
+    hotel_by_id, hotel_by_name, hotel_city_code = _source_indexes(hotels)
+    fallback_city_code = attraction_city_code or hotel_city_code
     legs: list[RouteLegRequest] = []
+
     for day_position, day in enumerate(plan.days):
         mode = normalize_transportation_mode(day.transportation or request.transportation)
-        stable_day_index = day.day_index if day.day_index >= 0 else day_position
-        for leg_index in range(max(0, len(day.attractions) - 1)):
-            origin = _route_point(
-                day.attractions[leg_index],
-                by_id=by_id,
-                by_name=by_name,
-                fallback_city_code=fallback_city_code,
-            )
-            destination = _route_point(
-                day.attractions[leg_index + 1],
-                by_id=by_id,
-                by_name=by_name,
-                fallback_city_code=fallback_city_code,
-            )
+        day_index = day.day_index if day.day_index >= 0 else day_position
+        start_hotel, return_hotel = resolve_day_hotels(plan, day_position)
+
+        if day.attractions and start_hotel is not None:
             legs.append(
                 RouteLegRequest(
-                    day_index=stable_day_index,
-                    leg_index=leg_index,
+                    day_index=day_index,
+                    leg_index=0,
+                    leg_type="hotel_departure",
                     date=day.date,
-                    origin=origin,
-                    destination=destination,
+                    origin=_route_point(
+                        start_hotel,
+                        by_id=hotel_by_id,
+                        by_name=hotel_by_name,
+                        fallback_city_code=fallback_city_code,
+                    ),
+                    destination=_route_point(
+                        day.attractions[0],
+                        by_id=attraction_by_id,
+                        by_name=attraction_by_name,
+                        fallback_city_code=fallback_city_code,
+                    ),
                     mode=mode,
                 )
             )
+
+        for leg_index in range(max(0, len(day.attractions) - 1)):
+            legs.append(
+                RouteLegRequest(
+                    day_index=day_index,
+                    leg_index=leg_index,
+                    leg_type="between_attractions",
+                    date=day.date,
+                    origin=_route_point(
+                        day.attractions[leg_index],
+                        by_id=attraction_by_id,
+                        by_name=attraction_by_name,
+                        fallback_city_code=fallback_city_code,
+                    ),
+                    destination=_route_point(
+                        day.attractions[leg_index + 1],
+                        by_id=attraction_by_id,
+                        by_name=attraction_by_name,
+                        fallback_city_code=fallback_city_code,
+                    ),
+                    mode=mode,
+                )
+            )
+
+        if day.attractions and return_hotel is not None:
+            legs.append(
+                RouteLegRequest(
+                    day_index=day_index,
+                    leg_index=0,
+                    leg_type="hotel_return",
+                    date=day.date,
+                    origin=_route_point(
+                        day.attractions[-1],
+                        by_id=attraction_by_id,
+                        by_name=attraction_by_name,
+                        fallback_city_code=fallback_city_code,
+                    ),
+                    destination=_route_point(
+                        return_hotel,
+                        by_id=hotel_by_id,
+                        by_name=hotel_by_name,
+                        fallback_city_code=fallback_city_code,
+                    ),
+                    mode=mode,
+                )
+            )
+
     return legs

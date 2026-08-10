@@ -9,7 +9,7 @@ from app.scheduling import ScheduleTimelineEvaluator
 
 
 class DeterministicConstraintOptimizer:
-    """Try bounded reorder/move candidates without changing attraction content."""
+    """Prefer reorder/move candidates, then shed an irreparable attraction."""
 
     def __init__(
         self,
@@ -143,17 +143,72 @@ class DeterministicConstraintOptimizer:
             if best is None or comparison[:4] < best[:4]:
                 best = comparison
 
+        removed_names: list[str] = []
         if best is None:
-            return None
-        (
-            candidate_cost,
-            source_position,
-            target_position,
-            insertion_index,
-            candidate_plan,
-            strategy,
-            moved_name,
-        ) = best
+            # Reordering and cross-day movement can both fail when a single remote
+            # attraction makes the lunch window impossible. Only then consider
+            # removing one attraction from the affected day.
+            removal_best: tuple[float, int, int, TripPlan, str] | None = None
+            removal_considered = 0
+            visited_days: set[int] = set()
+            for issue in actionable:
+                source_position = self._day_position(plan, issue.day_index)
+                if source_position is None or source_position in visited_days:
+                    continue
+                visited_days.add(source_position)
+                for attraction_index, attraction in enumerate(
+                    plan.days[source_position].attractions
+                ):
+                    if removal_considered >= self.max_candidates:
+                        break
+                    candidate = plan.model_copy(deep=True)
+                    candidate.days[source_position].attractions.pop(attraction_index)
+                    schedule = self.schedule_evaluator.evaluate(request, candidate, None)
+                    constraints = self.evaluator.evaluate(
+                        request,
+                        candidate,
+                        schedule,
+                        attractions=attractions,
+                        weather=weather,
+                    )
+                    removal_considered += 1
+                    candidate_cost = self._combined_cost(constraints, schedule)
+                    if candidate_cost + 0.01 >= baseline_cost:
+                        continue
+                    comparison = (
+                        candidate_cost,
+                        source_position,
+                        attraction_index,
+                        candidate,
+                        attraction.name,
+                    )
+                    if removal_best is None or comparison[:3] < removal_best[:3]:
+                        removal_best = comparison
+                if removal_considered >= self.max_candidates:
+                    break
+            considered += removal_considered
+            if removal_best is None:
+                return None
+            (
+                candidate_cost,
+                source_position,
+                insertion_index,
+                candidate_plan,
+                moved_name,
+            ) = removal_best
+            target_position = source_position
+            strategy = "remove_attraction_for_constraint_feasibility"
+            removed_names = [moved_name]
+        else:
+            (
+                candidate_cost,
+                source_position,
+                target_position,
+                insertion_index,
+                candidate_plan,
+                strategy,
+                moved_name,
+            ) = best
         improvement = (
             (baseline_cost - candidate_cost) / baseline_cost * 100.0
             if baseline_cost > 0
@@ -165,6 +220,7 @@ class DeterministicConstraintOptimizer:
             target_day_index=self._stable_day_index(plan, target_position),
             moved_attraction_name=moved_name,
             target_insertion_index=insertion_index,
+            removed_attraction_names=removed_names,
             strategy=strategy,
             baseline_cost=round(baseline_cost, 2),
             candidate_cost=round(candidate_cost, 2),

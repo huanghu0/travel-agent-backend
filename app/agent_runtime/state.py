@@ -21,7 +21,7 @@ from app.tools.models import ActionResult, ToolErrorType
 from app.validation import TripValidationResult
 
 
-CURRENT_AGENT_STATE_VERSION = 8
+CURRENT_AGENT_STATE_VERSION = 9
 
 
 def utc_now() -> datetime:
@@ -93,6 +93,15 @@ class ActionRecord(BaseModel):
     recorded_at: datetime = Field(default_factory=utc_now)
 
 
+class PlanNormalizationRecord(BaseModel):
+    """Audit record for deterministic cleanup of one LLM-produced plan."""
+
+    trigger_action: AgentAction
+    removed_attraction_names: list[str] = Field(default_factory=list)
+    removed_paths: list[str] = Field(default_factory=list)
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
 RouteOptimizationStatus = Literal[
     "not_started",
     "candidate_pending",
@@ -138,6 +147,7 @@ class ScheduleOptimizationRecord(BaseModel):
     source_day_index: int | None = Field(default=None, ge=0)
     target_day_index: int | None = Field(default=None, ge=0)
     moved_attraction_name: str | None = None
+    removed_attraction_names: list[str] = Field(default_factory=list)
     approximate_improvement_percent: float = 0.0
     actual_improvement_percent: float = 0.0
     baseline_cost: float | None = Field(default=None, ge=0)
@@ -157,6 +167,7 @@ class ConstraintOptimizationRecord(BaseModel):
     source_day_index: int | None = Field(default=None, ge=0)
     target_day_index: int | None = Field(default=None, ge=0)
     moved_attraction_name: str | None = None
+    removed_attraction_names: list[str] = Field(default_factory=list)
     approximate_improvement_percent: float = 0.0
     actual_improvement_percent: float = 0.0
     baseline_cost: float | None = Field(default=None, ge=0)
@@ -240,6 +251,7 @@ class AgentState(BaseModel):
     last_action_result: ActionResult | None = None
     last_validation_result: TripValidationResult | None = None
     validation_history: list[TripValidationResult] = Field(default_factory=list)
+    plan_normalization_history: list[PlanNormalizationRecord] = Field(default_factory=list)
 
     # 可审计执行历史：动作次数、每一步记录和用户可见错误。
     attempts_by_action: dict[str, int] = Field(default_factory=dict)

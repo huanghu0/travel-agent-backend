@@ -1,7 +1,7 @@
 import unittest
 
 from app.schemas.trip_schema import TripPlan, TripRequest
-from app.validation import TripPlanValidator, ValidationSeverity
+from app.validation import TripPlanValidator, ValidationSeverity, remove_duplicate_attractions
 
 
 def make_request() -> TripRequest:
@@ -124,6 +124,63 @@ class TripPlanValidatorTests(unittest.TestCase):
 
         codes = {item.code for item in result.issues}
         self.assertNotIn("attraction.not_in_sources", codes)
+
+    def test_duplicate_attraction_across_days_is_repairable_error(self):
+        plan_data = make_plan().model_dump()
+        repeated = {
+            "name": "Repeated Place",
+            "address": "same address",
+            "location": {"longitude": 104.05, "latitude": 30.65},
+            "visit_duration": 60,
+            "description": "same place",
+            "poi_id": "poi-repeated",
+        }
+        plan_data["days"][0]["attractions"] = [repeated]
+        plan_data["days"][1]["attractions"] = [dict(repeated)]
+
+        result = self.validator.validate(
+            make_request(),
+            TripPlan.model_validate(plan_data),
+        )
+
+        duplicate = next(
+            item for item in result.issues
+            if item.code == "attraction.duplicate_across_days"
+        )
+        self.assertFalse(result.valid)
+        self.assertTrue(result.repairable)
+        self.assertEqual(duplicate.path, "days[1].attractions[0].name")
+        self.assertEqual(
+            duplicate.actual["first_occurrence"],
+            "days[0].attractions[0]",
+        )
+
+    def test_duplicate_normalizer_keeps_first_occurrence_and_does_not_mutate_input(self):
+        plan_data = make_plan().model_dump()
+        repeated = {
+            "name": "Repeated Place",
+            "address": "same address",
+            "location": {"longitude": 104.05, "latitude": 30.65},
+            "visit_duration": 60,
+            "description": "same place",
+            "poi_id": "poi-repeated",
+        }
+        plan_data["days"][0]["attractions"] = [repeated]
+        plan_data["days"][1]["attractions"] = [dict(repeated)]
+        plan = TripPlan.model_validate(plan_data)
+        original = plan.model_dump()
+
+        normalized, removed = remove_duplicate_attractions(plan)
+
+        self.assertEqual(plan.model_dump(), original)
+        self.assertEqual(len(normalized.days[0].attractions), 1)
+        self.assertEqual(normalized.days[1].attractions, [])
+        self.assertEqual(removed, [("Repeated Place", "days[1].attractions[0]")])
+        result = self.validator.validate(make_request(), normalized)
+        self.assertNotIn(
+            "attraction.duplicate_across_days",
+            {item.code for item in result.issues},
+        )
 
     def test_inconsistent_user_request_is_not_llm_repairable(self):
         request = make_request().model_copy(update={"travel_days": 3})

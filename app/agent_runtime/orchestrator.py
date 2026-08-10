@@ -16,6 +16,7 @@ from app.agent_runtime.state import (
     AgentAction,
     AgentState,
     ConstraintOptimizationRecord,
+    PlanNormalizationRecord,
     RouteOptimizationRecord,
     ScheduleOptimizationRecord,
 )
@@ -41,7 +42,7 @@ from app.scheduling import (
 from app.tools.models import ActionResult, ToolErrorType
 from app.tools.registry import ToolRegistry
 from app.tools.trip_registry import build_trip_tool_registry
-from app.validation import TripPlanValidator
+from app.validation import TripPlanValidator, remove_duplicate_attractions
 
 
 class AgentStateStore(Protocol):
@@ -92,6 +93,7 @@ class TripOrchestrator:
         schedule_default_start_time: str = "09:00",
         schedule_default_end_time: str = "18:00",
         schedule_lunch_duration_minutes: int = 60,
+        schedule_lunch_window_start: str = "11:30",
         schedule_route_buffer_minutes: int = 10,
         schedule_attraction_buffer_minutes: int = 10,
         schedule_evaluator: ScheduleTimelineEvaluator | None = None,
@@ -186,6 +188,7 @@ class TripOrchestrator:
             default_start_time=schedule_default_start_time,
             default_end_time=schedule_default_end_time,
             lunch_duration_minutes=schedule_lunch_duration_minutes,
+            lunch_window_start=schedule_lunch_window_start,
             route_buffer_minutes=schedule_route_buffer_minutes,
             attraction_buffer_minutes=schedule_attraction_buffer_minutes,
         )
@@ -968,6 +971,7 @@ class TripOrchestrator:
                     source_day_index=candidate.source_day_index,
                     target_day_index=candidate.target_day_index,
                     moved_attraction_name=candidate.moved_attraction_name,
+                    removed_attraction_names=candidate.removed_attraction_names,
                     approximate_improvement_percent=(
                         candidate.approximate_improvement_percent
                     ),
@@ -1266,6 +1270,7 @@ class TripOrchestrator:
                     source_day_index=candidate.source_day_index,
                     target_day_index=candidate.target_day_index,
                     moved_attraction_name=candidate.moved_attraction_name,
+                    removed_attraction_names=candidate.removed_attraction_names,
                     approximate_improvement_percent=(
                         candidate.approximate_improvement_percent
                     ),
@@ -1516,6 +1521,7 @@ class TripOrchestrator:
                     state.request,
                     state.trip_plan,
                     attractions=state.attractions,
+                    hotels=state.hotels,
                 ),
             }
         if action is AgentAction.REPAIR_PLAN:
@@ -1553,7 +1559,11 @@ class TripOrchestrator:
             state.hotels = result.data
             return
         if action is AgentAction.GENERATE_PLAN:
-            state.trip_plan = TripPlan.model_validate(result.data)
+            state.trip_plan = self._normalize_llm_plan(
+                state,
+                TripPlan.model_validate(result.data),
+                action,
+            )
             self._clear_route_analysis(
                 state,
                 reset_optimization_count=True,
@@ -1596,7 +1606,11 @@ class TripOrchestrator:
             state.last_validation_result = None
             return
         if action is AgentAction.REPAIR_PLAN:
-            state.trip_plan = TripPlan.model_validate(result.data)
+            state.trip_plan = self._normalize_llm_plan(
+                state,
+                TripPlan.model_validate(result.data),
+                action,
+            )
             self._clear_route_analysis(
                 state,
                 reset_optimization_count=False,
@@ -1604,6 +1618,25 @@ class TripOrchestrator:
             state.repair_count += 1
             return
         raise ValueError(f"unsupported action result: {action.value}")
+
+    @staticmethod
+    def _normalize_llm_plan(
+        state: AgentState,
+        plan: TripPlan,
+        trigger_action: AgentAction,
+    ) -> TripPlan:
+        """Remove later duplicate POIs before any route queries are issued."""
+
+        normalized, removed = remove_duplicate_attractions(plan)
+        if removed:
+            state.plan_normalization_history.append(
+                PlanNormalizationRecord(
+                    trigger_action=trigger_action,
+                    removed_attraction_names=[name for name, _ in removed],
+                    removed_paths=[path for _, path in removed],
+                )
+            )
+        return normalized
 
     def _checkpoint(self, state: AgentState) -> None:
         """更新时间戳，并把当前完整状态保存为可恢复检查点。"""

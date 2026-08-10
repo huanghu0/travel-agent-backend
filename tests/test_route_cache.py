@@ -52,6 +52,7 @@ class RouteCacheKeyTests(unittest.TestCase):
             update={
                 "day_index": 4,
                 "leg_index": 2,
+                "leg_type": "hotel_departure",
                 "date": "2026-09-01",
                 "origin": leg.origin.model_copy(update={"name": "Renamed A"}),
             }

@@ -6,8 +6,10 @@ from app.routing.optimizer import (
 )
 from app.routing.plan_routes import (
     build_route_legs,
+    expected_route_leg_keys,
     normalize_transportation_mode,
     plan_route_fingerprint,
+    resolve_day_hotels,
 )
 from app.routing.quality import (
     RouteDayQuality,
@@ -23,9 +25,11 @@ __all__ = [
     "RouteOptimizationCandidate",
     "RouteQualityReport",
     "build_route_legs",
+    "expected_route_leg_keys",
     "evaluate_route_quality",
     "is_route_quality_improvement",
     "normalize_transportation_mode",
     "plan_route_fingerprint",
+    "resolve_day_hotels",
     "route_quality_improvement_percent",
 ]

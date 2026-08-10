@@ -7,6 +7,7 @@ import math
 from pydantic import BaseModel, Field
 
 from app.providers.amap.models import RouteEstimate, RouteEstimateResult
+from app.routing.plan_routes import expected_route_leg_keys
 from app.schemas.trip_schema import TripPlan
 
 
@@ -18,7 +19,7 @@ LOW_QUALITY_SCORE = 60.0
 
 
 class RouteDayQuality(BaseModel):
-    """Quality metrics for adjacent attraction legs in one day."""
+    """Quality metrics for all hotel and attraction route legs in one day."""
 
     day_index: int = Field(ge=0)
     date: str = ""
@@ -74,7 +75,7 @@ def evaluate_route_quality(
     plan: TripPlan,
     route_result: RouteEstimateResult | dict,
 ) -> RouteQualityReport:
-    """Score expected adjacent legs; missing and unavailable legs receive a penalty."""
+    """Score every expected hotel and attraction leg; missing legs receive a penalty."""
 
     result = (
         route_result
@@ -82,14 +83,16 @@ def evaluate_route_quality(
         else RouteEstimateResult.model_validate(route_result)
     )
     indexed_routes = {
-        (route.day_index, route.leg_index): route
+        (route.day_index, route.leg_type, route.leg_index): route
         for route in result.routes
     }
+    expected_keys = expected_route_leg_keys(plan)
     day_reports: list[RouteDayQuality] = []
 
     for day_position, day in enumerate(plan.days):
         day_index = day.day_index if day.day_index >= 0 else day_position
-        leg_count = max(0, len(day.attractions) - 1)
+        day_keys = [key for key in expected_keys if key[0] == day_index]
+        leg_count = len(day_keys)
         available_legs = 0
         unavailable_legs = 0
         total_distance = 0
@@ -100,8 +103,8 @@ def evaluate_route_quality(
         longest_duration: int | None = None
         optimization_cost = 0.0
 
-        for leg_index in range(leg_count):
-            route = indexed_routes.get((day_index, leg_index))
+        for _, leg_type, leg_index in day_keys:
+            route = indexed_routes.get((day_index, leg_type, leg_index))
             if not _usable_route(route):
                 unavailable_legs += 1
                 optimization_cost += UNAVAILABLE_LEG_PENALTY
