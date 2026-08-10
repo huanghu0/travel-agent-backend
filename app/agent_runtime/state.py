@@ -1,4 +1,4 @@
-"""State models for the deterministic trip-planning agent runtime."""
+"""确定性旅行规划智能体运行时的状态模型。"""
 
 from __future__ import annotations
 
@@ -9,11 +9,17 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.commute import (
+    CommuteConstraintReport,
+    CommuteReplacementCandidate,
+    CommuteSupplementQuery,
+)
 from app.constraints import (
     ConstraintOptimizationCandidate,
     ConstraintOptimizationStatus,
     TripConstraintReport,
 )
+from app.plan_content import ContentRefillCandidate
 from app.routing import RouteOptimizationCandidate, RouteQualityReport
 from app.schemas.trip_schema import TripPlan, TripRequest
 from app.scheduling import ScheduleOptimizationCandidate, ScheduleQualityReport
@@ -21,17 +27,17 @@ from app.tools.models import ActionResult, ToolErrorType
 from app.validation import TripValidationResult
 
 
-CURRENT_AGENT_STATE_VERSION = 9
+CURRENT_AGENT_STATE_VERSION = 12
 
 
 def utc_now() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
+    """返回带时区信息的 UTC 时间。"""
 
     return datetime.now(timezone.utc)
 
 
 class ExecutionBudget(BaseModel):
-    """Persisted lifetime limits for one agent session."""
+    """单个智能体会话需要持久化的生命周期预算。"""
 
     max_steps: int = Field(default=24, ge=1)
     max_duration_seconds: float = Field(default=180.0, gt=0)
@@ -41,10 +47,14 @@ class ExecutionBudget(BaseModel):
     max_route_optimization_attempts: int = Field(default=1, ge=0)
     max_schedule_optimization_attempts: int = Field(default=1, ge=0)
     max_constraint_optimization_attempts: int = Field(default=1, ge=0)
+    max_content_refill_attempts: int = Field(default=2, ge=0)
+    max_commute_replacement_attempts: int = Field(default=2, ge=0)
+    max_commute_supplement_searches: int = Field(default=2, ge=0)
+    minimum_total_attractions: int = Field(default=0, ge=0)
 
 
 class AgentAction(str, Enum):
-    """Actions that the runtime is allowed to execute."""
+    """运行时允许执行的动作白名单。"""
 
     SEARCH_ATTRACTIONS = "search_attractions"
     GET_WEATHER = "get_weather"
@@ -53,10 +63,15 @@ class AgentAction(str, Enum):
     VALIDATE_PLAN = "validate_plan"
     ESTIMATE_ROUTES = "estimate_routes"
     OPTIMIZE_ROUTES = "optimize_routes"
+    EVALUATE_COMMUTE = "evaluate_commute"
+    REPLACE_REMOTE_ATTRACTION = "replace_remote_attraction"
+    SUPPLEMENT_ATTRACTIONS = "supplement_attractions"
     EVALUATE_SCHEDULE = "evaluate_schedule"
     OPTIMIZE_SCHEDULE = "optimize_schedule"
     EVALUATE_CONSTRAINTS = "evaluate_constraints"
     OPTIMIZE_CONSTRAINTS = "optimize_constraints"
+    REFILL_ATTRACTIONS = "refill_attractions"
+    REBUILD_PLAN_CONTENT = "rebuild_plan_content"
     REPAIR_PLAN = "repair_plan"
     FINISH = "finish"
 
@@ -72,7 +87,7 @@ AgentStatus = Literal[
 
 
 class ActionRecord(BaseModel):
-    """One deterministic decision and its execution result."""
+    """一次确定性决策及其执行结果审计记录。"""
 
     step: int
     action: AgentAction
@@ -94,7 +109,7 @@ class ActionRecord(BaseModel):
 
 
 class PlanNormalizationRecord(BaseModel):
-    """Audit record for deterministic cleanup of one LLM-produced plan."""
+    """对 LLM 生成行程执行确定性清理的审计记录。"""
 
     trigger_action: AgentAction
     removed_attraction_names: list[str] = Field(default_factory=list)
@@ -111,7 +126,7 @@ RouteOptimizationStatus = Literal[
 
 
 class RouteOptimizationRecord(BaseModel):
-    """Audit record for one bounded route-order optimization attempt."""
+    """一次有界路线顺序优化尝试的审计记录。"""
 
     attempt: int = Field(ge=0)
     status: Literal["accepted", "reverted", "skipped"]
@@ -136,7 +151,7 @@ ScheduleOptimizationStatus = Literal[
 
 
 class ScheduleOptimizationRecord(BaseModel):
-    """Audit record for one bounded cross-day schedule optimization attempt."""
+    """一次有界跨日时间轴优化尝试的审计记录。"""
 
     attempt: int = Field(ge=0)
     status: Literal["accepted", "reverted", "skipped"]
@@ -156,7 +171,7 @@ class ScheduleOptimizationRecord(BaseModel):
 
 
 class ConstraintOptimizationRecord(BaseModel):
-    """Audit record for one bounded feasibility optimization attempt."""
+    """一次有界可执行性冲突优化尝试的审计记录。"""
 
     attempt: int = Field(ge=0)
     status: Literal["accepted", "reverted", "skipped"]
@@ -172,6 +187,79 @@ class ConstraintOptimizationRecord(BaseModel):
     actual_improvement_percent: float = 0.0
     baseline_cost: float | None = Field(default=None, ge=0)
     candidate_cost: float | None = Field(default=None, ge=0)
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
+ContentRefillStatus = Literal[
+    "not_started",
+    "candidate_pending",
+    "completed",
+    "skipped",
+]
+
+
+CommuteOptimizationStatus = Literal[
+    "not_started",
+    "supplement_needed",
+    "candidate_pending",
+    "completed",
+    "skipped",
+]
+
+
+class CommuteSupplementRecord(BaseModel):
+    """一次有界高德周边候选补充搜索的审计记录。"""
+
+    attempt: int = Field(ge=1)
+    status: Literal["completed", "empty", "failed"]
+    reason: str
+    target_attraction_name: str
+    day_index: int = Field(ge=0)
+    attraction_index: int = Field(ge=0)
+    anchor_names: list[str] = Field(default_factory=list)
+    center_longitude: float = Field(ge=-180, le=180)
+    center_latitude: float = Field(ge=-90, le=90)
+    radius_meters: int = Field(ge=100, le=50000)
+    received_candidates: int = Field(default=0, ge=0)
+    added_candidates: int = Field(default=0, ge=0)
+    final_candidates: int = Field(default=0, ge=0)
+    error: str | None = None
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
+class CommuteReplacementRecord(BaseModel):
+    """一次通勤超限景点替换及复验结果的审计记录。"""
+
+    attempt: int = Field(ge=0)
+    status: Literal["accepted", "reverted", "skipped"]
+    reason: str
+    day_index: int | None = Field(default=None, ge=0)
+    attraction_index: int | None = Field(default=None, ge=0)
+    replaced_attraction_name: str | None = None
+    replacement_attraction_name: str | None = None
+    replacement_attraction_id: str | None = None
+    baseline_excessive_segments: int = Field(default=0, ge=0)
+    candidate_excessive_segments: int = Field(default=0, ge=0)
+    baseline_max_duration_seconds: int = Field(default=0, ge=0)
+    candidate_max_duration_seconds: int = Field(default=0, ge=0)
+    baseline_fingerprint: str | None = None
+    candidate_fingerprint: str | None = None
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
+class ContentRefillRecord(BaseModel):
+    """一次最低景点数量回填候选及最终结果的审计记录。"""
+
+    attempt: int = Field(ge=0)
+    status: Literal["accepted", "reverted", "skipped"]
+    reason: str
+    added_attraction_names: list[str] = Field(default_factory=list)
+    added_attraction_ids: list[str] = Field(default_factory=list)
+    target_day_indices: list[int] = Field(default_factory=list)
+    baseline_attraction_count: int = Field(default=0, ge=0)
+    candidate_attraction_count: int = Field(default=0, ge=0)
+    baseline_fingerprint: str | None = None
+    candidate_fingerprint: str | None = None
     recorded_at: datetime = Field(default_factory=utc_now)
 
 
@@ -221,6 +309,28 @@ class AgentState(BaseModel):
     route_optimization_history: list[RouteOptimizationRecord] = Field(
         default_factory=list
     )
+    commute_report: CommuteConstraintReport | None = None
+    commute_plan_fingerprint: str | None = None
+    commute_replacement_count: int = Field(default=0, ge=0)
+    commute_optimization_status: CommuteOptimizationStatus = "not_started"
+    commute_candidate: CommuteReplacementCandidate | None = None
+    commute_baseline_plan: TripPlan | None = None
+    commute_baseline_routes: dict[str, Any] | None = None
+    commute_baseline_route_quality: RouteQualityReport | None = None
+    commute_baseline_report: CommuteConstraintReport | None = None
+    commute_baseline_schedule: ScheduleQualityReport | None = None
+    commute_baseline_constraint_report: TripConstraintReport | None = None
+    commute_baseline_route_fingerprint: str | None = None
+    commute_baseline_constraint_fingerprint: str | None = None
+    commute_excluded_candidate_identities: list[str] = Field(default_factory=list)
+    commute_supplement_search_count: int = Field(default=0, ge=0)
+    commute_supplement_query: CommuteSupplementQuery | None = None
+    commute_supplement_history: list[CommuteSupplementRecord] = Field(
+        default_factory=list
+    )
+    commute_replacement_history: list[CommuteReplacementRecord] = Field(
+        default_factory=list
+    )
     schedule_quality_report: ScheduleQualityReport | None = None
     schedule_quality_plan_fingerprint: str | None = None
     schedule_optimization_count: int = Field(default=0, ge=0)
@@ -248,6 +358,20 @@ class AgentState(BaseModel):
     constraint_optimization_history: list[ConstraintOptimizationRecord] = Field(
         default_factory=list
     )
+    content_refill_count: int = Field(default=0, ge=0)
+    content_refill_status: ContentRefillStatus = "not_started"
+    content_refill_candidate: ContentRefillCandidate | None = None
+    content_refill_baseline_plan: TripPlan | None = None
+    content_refill_baseline_routes: dict[str, Any] | None = None
+    content_refill_baseline_route_quality: RouteQualityReport | None = None
+    content_refill_baseline_schedule: ScheduleQualityReport | None = None
+    content_refill_baseline_constraint_report: TripConstraintReport | None = None
+    content_refill_baseline_route_fingerprint: str | None = None
+    content_refill_baseline_constraint_fingerprint: str | None = None
+    content_refill_excluded_identities: list[str] = Field(default_factory=list)
+    content_refill_history: list[ContentRefillRecord] = Field(default_factory=list)
+    plan_consistency_fingerprint: str | None = None
+    plan_consistency_rebuild_count: int = Field(default=0, ge=0)
     last_action_result: ActionResult | None = None
     last_validation_result: TripValidationResult | None = None
     validation_history: list[TripValidationResult] = Field(default_factory=list)
@@ -260,7 +384,7 @@ class AgentState(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_budget_compatibility(self) -> "AgentState":
-        """Load older checkpoints without resetting their existing limits."""
+        """加载旧版本检查点，同时保留其已有生命周期预算。"""
 
         # 旧版本检查点没有 execution_budget 时，从旧字段补齐；新版本则以预算对象为准。
         if "execution_budget" not in self.model_fields_set:
@@ -287,6 +411,10 @@ class AgentState(BaseModel):
         max_route_optimization_attempts: int = 1,
         max_schedule_optimization_attempts: int = 1,
         max_constraint_optimization_attempts: int = 1,
+        max_content_refill_attempts: int = 2,
+        max_commute_replacement_attempts: int = 2,
+        max_commute_supplement_searches: int = 2,
+        minimum_total_attractions: int = 0,
         max_duration_seconds: float = 180.0,
         max_tool_calls: int = 15,
         max_llm_calls: int = 6,
@@ -303,6 +431,10 @@ class AgentState(BaseModel):
                 max_route_optimization_attempts=max_route_optimization_attempts,
                 max_schedule_optimization_attempts=max_schedule_optimization_attempts,
                 max_constraint_optimization_attempts=max_constraint_optimization_attempts,
+                max_content_refill_attempts=max_content_refill_attempts,
+                max_commute_replacement_attempts=max_commute_replacement_attempts,
+                max_commute_supplement_searches=max_commute_supplement_searches,
+                minimum_total_attractions=minimum_total_attractions,
             )
         now = utc_now()
         values: dict[str, Any] = {
@@ -321,7 +453,7 @@ class AgentState(BaseModel):
         return cls(**values)
 
     def next_attempt(self, action: AgentAction) -> int:
-        """Increment and return the lifetime attempt count for an action."""
+        """增加并返回某个动作在整个会话生命周期中的尝试次数。"""
 
         key = action.value
         attempt = self.attempts_by_action.get(key, 0) + 1
@@ -329,14 +461,14 @@ class AgentState(BaseModel):
         return attempt
 
     def refresh_duration(self, *, now: datetime | None = None) -> None:
-        """Refresh persisted wall-clock consumption without ever decreasing it."""
+        """刷新持久化的实际运行耗时，并保证累计值不会倒退。"""
 
         current = now or utc_now()
         elapsed_ms = max(0, round((current - self.started_at).total_seconds() * 1000))
         self.total_duration_ms = max(self.total_duration_ms, elapsed_ms)
 
     def mark_budget_exhausted(self, reason: str) -> None:
-        """Record a terminal lifetime-budget failure."""
+        """记录不可继续执行的生命周期预算耗尽状态。"""
 
         self.status = "budget_exhausted"
         self.budget_exhausted_reason = reason
@@ -344,7 +476,7 @@ class AgentState(BaseModel):
             self.errors.append(reason)
 
     def touch(self) -> None:
-        """Update timestamps and duration before a checkpoint."""
+        """保存检查点前更新时间戳和累计运行时长。"""
 
         self.updated_at = utc_now()
         self.refresh_duration(now=self.updated_at)

@@ -1,0 +1,240 @@
+{
+  "success": true,
+  "message": "旅行计划生成成功",
+  "data": {
+    "city": "杭州",
+    "start_date": "2026-08-10",
+    "end_date": "2026-08-12",
+    "days": [
+      {
+        "date": "2026-08-10",
+        "day_index": 0,
+        "description": "2026-08-10 按顺序游览湘湖国家旅游度假区，景点游览时间合计约180分钟。",
+        "transportation": "出行方式：公共交通；蜂窝酒店(西湖南星桥地铁站店)→湘湖国家旅游度假区（公共交通约36分钟，约13.2公里）；湘湖国家旅游度假区→蜂窝酒店(西湖南星桥地铁站店)（公共交通约38分钟，约13.3公里）。",
+        "accommodation": "入住蜂窝酒店(西湖南星桥地铁站店)（秋涛路18号中针商务大厦3层，预计260元/晚）。",
+        "hotel": {
+          "name": "蜂窝酒店(西湖南星桥地铁站店)",
+          "address": "秋涛路18号中针商务大厦3层",
+          "location": {
+            "longitude": 120.174923,
+            "latitude": 30.216352
+          },
+          "price_range": "220-320元",
+          "rating": "4.5",
+          "distance": "距离湖滨公园约5公里，前往地铁站和湘湖方向较方便",
+          "type": "经济型酒店",
+          "estimated_cost": 260
+        },
+        "attractions": [
+          {
+            "name": "湘湖国家旅游度假区",
+            "address": "湘湖路132号",
+            "location": {
+              "longitude": 120.217125,
+              "latitude": 30.13226
+            },
+            "visit_duration": 180,
+            "description": "午后乘地铁前往湘湖，选择湖畔步道进行轻松游览，感受湖泊、湿地与山水景观。中雨天气不建议乘坐无顶游船。",
+            "category": "风景名胜;风景名胜;国家级景点",
+            "rating": 4.8,
+            "photos": null,
+            "poi_id": "B023B07SNT",
+            "image_url": null,
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "breakfast",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近早餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排早餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 25
+          },
+          {
+            "type": "lunch",
+            "name": "湘湖国家旅游度假区附近午餐",
+            "address": "湘湖路132号",
+            "location": {
+              "longitude": 120.217125,
+              "latitude": 30.13226
+            },
+            "description": "围绕当天实际地点安排午餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 50
+          },
+          {
+            "type": "dinner",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近晚餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排晚餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 70
+          }
+        ]
+      },
+      {
+        "date": "2026-08-11",
+        "day_index": 1,
+        "description": "2026-08-11 暂无固定景点安排，可在酒店或市区周边自由活动并预留休息时间。",
+        "transportation": "当日无固定景点路线，市内活动建议使用公共交通。",
+        "accommodation": "入住蜂窝酒店(西湖南星桥地铁站店)（秋涛路18号中针商务大厦3层，预计260元/晚）。",
+        "hotel": {
+          "name": "蜂窝酒店(西湖南星桥地铁站店)",
+          "address": "秋涛路18号中针商务大厦3层",
+          "location": {
+            "longitude": 120.174923,
+            "latitude": 30.216352
+          },
+          "price_range": "220-320元",
+          "rating": "4.5",
+          "distance": "作为杭州主城区住宿点，需前往杭州东站或杭州西站换乘高铁前往千岛湖",
+          "type": "经济型酒店",
+          "estimated_cost": 260
+        },
+        "attractions": [],
+        "meals": [
+          {
+            "type": "breakfast",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近早餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排早餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 25
+          },
+          {
+            "type": "lunch",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近午餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排午餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 50
+          },
+          {
+            "type": "dinner",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近晚餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排晚餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 70
+          }
+        ]
+      },
+      {
+        "date": "2026-08-12",
+        "day_index": 2,
+        "description": "2026-08-12 按顺序游览桐洲岛，景点游览时间合计约150分钟。",
+        "transportation": "出行方式：公共交通；蜂窝酒店(西湖南星桥地铁站店)→桐洲岛（公共交通约143分钟，约63.8公里）。",
+        "accommodation": "当日未绑定具体酒店，按“经济型酒店”偏好自行确认住宿或返程。",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "桐洲岛",
+            "address": "桐董线附近",
+            "location": {
+              "longitude": 119.802977,
+              "latitude": 29.883983
+            },
+            "visit_duration": 150,
+            "description": "上午前往桐洲岛，欣赏富春江沿岸与岛屿自然景观，以散步和休闲观景为主。雨天不参加露营、皮划艇等户外水上活动。",
+            "category": "风景名胜;风景名胜;风景名胜",
+            "rating": 4.7,
+            "photos": null,
+            "poi_id": "B0FFGB9GDO",
+            "image_url": null,
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "breakfast",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近早餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排早餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 25
+          },
+          {
+            "type": "lunch",
+            "name": "桐洲岛附近午餐",
+            "address": "桐董线附近",
+            "location": {
+              "longitude": 119.802977,
+              "latitude": 29.883983
+            },
+            "description": "围绕当天实际地点安排午餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 50
+          },
+          {
+            "type": "dinner",
+            "name": "桐洲岛附近晚餐",
+            "address": "桐董线附近",
+            "location": {
+              "longitude": 119.802977,
+              "latitude": 29.883983
+            },
+            "description": "围绕当天实际地点安排晚餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 70
+          }
+        ]
+      }
+    ],
+    "weather_info": [
+      {
+        "date": "2026-08-10",
+        "day_weather": "中雨",
+        "night_weather": "中雨",
+        "day_temp": 30,
+        "night_temp": 25,
+        "wind_direction": "东风",
+        "wind_power": "1-3级"
+      },
+      {
+        "date": "2026-08-11",
+        "day_weather": "中雨",
+        "night_weather": "小雨",
+        "day_temp": 31,
+        "night_temp": 25,
+        "wind_direction": "东风",
+        "wind_power": "1-3级"
+      },
+      {
+        "date": "2026-08-12",
+        "day_weather": "中雨",
+        "night_weather": "阴",
+        "day_temp": 30,
+        "night_temp": 24,
+        "wind_direction": "东北风",
+        "wind_power": "1-3级"
+      }
+    ],
+    "overall_suggestions": "本次行程包含湘湖国家旅游度假区、桐洲岛，请提前核对开放时间并按最终顺序出行。 当前时间轴无超时，仍建议每天预留机动时间。 市内交通按“公共交通”规划，费用与班次以出行当日实时信息为准。",
+    "budget": {
+      "total_attractions": 0,
+      "total_hotels": 520,
+      "total_meals": 435,
+      "total_transportation": 47,
+      "total": 1002
+    }
+  },
+  "session_id": "56a22501-f892-4fdc-aedb-61f68c35455c",
+  "execution_steps": 12
+}

@@ -1,4 +1,4 @@
-"""Route construction, quality scoring, and deterministic optimization helpers."""
+"""路线构建、质量评分以及确定性路线优化组件。"""
 
 from app.routing.optimizer import (
     DeterministicRouteOptimizer,

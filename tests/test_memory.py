@@ -109,7 +109,7 @@ def make_orchestrator(store, *, attraction_responses=None):
             weather_agent=WeatherAgent(calls),
             hotel_agent=HotelAgent(calls),
             planner_agent=PlannerAgent(calls),
-            max_steps=10,
+            max_steps=16,
             max_attempts_per_action=2,
             state_store=store,
         ),
@@ -138,11 +138,11 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         recording_store = RecordingStore()
         orchestrator, _ = make_orchestrator(recording_store)
 
-        orchestrator.run(make_request(), session_id="checkpoint-session")
+        state = orchestrator.run(make_request(), session_id="checkpoint-session")
 
         self.assertEqual(
             [len(item.action_history) for item in recording_store.snapshots],
-            [0, 1, 2, 3, 4, 5, 6, 7, 8],
+            list(range(state.current_step + 1)),
         )
         self.assertEqual(recording_store.snapshots[0].status, "running")
         self.assertEqual(recording_store.snapshots[-1].status, "completed")
@@ -154,7 +154,7 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
 
         self.assertEqual(loaded, state)
         self.assertEqual(loaded.status, "completed")
-        self.assertEqual(len(loaded.action_history), 8)
+        self.assertEqual(len(loaded.action_history), 10)
         self.assertEqual(loaded.action_history[-1].action, AgentAction.FINISH)
         self.assertIsNotNone(loaded.created_at.tzinfo)
         self.assertIsNotNone(loaded.updated_at.tzinfo)
@@ -196,6 +196,21 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
             "route_optimization_baseline_quality",
             "route_optimization_baseline_fingerprint",
             "route_optimization_history",
+            "commute_report",
+            "commute_plan_fingerprint",
+            "commute_replacement_count",
+            "commute_optimization_status",
+            "commute_candidate",
+            "commute_baseline_plan",
+            "commute_baseline_routes",
+            "commute_baseline_route_quality",
+            "commute_baseline_report",
+            "commute_baseline_schedule",
+            "commute_baseline_constraint_report",
+            "commute_baseline_route_fingerprint",
+            "commute_baseline_constraint_fingerprint",
+            "commute_excluded_candidate_identities",
+            "commute_replacement_history",
             "schedule_quality_report",
             "schedule_quality_plan_fingerprint",
             "schedule_optimization_count",
@@ -219,11 +234,28 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
             "constraint_optimization_baseline_report",
             "constraint_optimization_baseline_fingerprint",
             "constraint_optimization_history",
+            "content_refill_count",
+            "content_refill_status",
+            "content_refill_candidate",
+            "content_refill_baseline_plan",
+            "content_refill_baseline_routes",
+            "content_refill_baseline_route_quality",
+            "content_refill_baseline_schedule",
+            "content_refill_baseline_constraint_report",
+            "content_refill_baseline_route_fingerprint",
+            "content_refill_baseline_constraint_fingerprint",
+            "content_refill_excluded_identities",
+            "content_refill_history",
+            "plan_consistency_fingerprint",
+            "plan_consistency_rebuild_count",
         ):
             payload.pop(field)
         payload["execution_budget"].pop("max_route_optimization_attempts")
         payload["execution_budget"].pop("max_schedule_optimization_attempts")
         payload["execution_budget"].pop("max_constraint_optimization_attempts")
+        payload["execution_budget"].pop("max_content_refill_attempts")
+        payload["execution_budget"].pop("max_commute_replacement_attempts")
+        payload["execution_budget"].pop("minimum_total_attractions")
 
         loaded = AgentState.model_validate(payload)
 
@@ -250,6 +282,12 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
             loaded.execution_budget.max_constraint_optimization_attempts,
             1,
         )
+        self.assertEqual(loaded.execution_budget.max_content_refill_attempts, 2)
+        self.assertEqual(loaded.execution_budget.max_commute_replacement_attempts, 2)
+        self.assertEqual(loaded.commute_optimization_status, "not_started")
+        self.assertEqual(loaded.execution_budget.minimum_total_attractions, 0)
+        self.assertEqual(loaded.content_refill_status, "not_started")
+        self.assertIsNone(loaded.plan_consistency_fingerprint)
 
     def test_missing_session_raises_specific_error(self):
         with self.assertRaises(SessionNotFoundError):
@@ -258,7 +296,7 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
     def test_resume_skips_actions_already_present_in_checkpoint(self):
         partial = AgentState.create(
             make_request(),
-            max_steps=8,
+            max_steps=9,
             session_id="partial-session",
         )
         partial.status = "running"

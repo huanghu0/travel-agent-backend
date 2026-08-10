@@ -1,4 +1,4 @@
-"""Deterministic runtime primitives for the travel agent."""
+"""旅行规划智能体使用的确定性运行时基础组件。"""
 
 from app.agent_runtime.exceptions import (
     AgentActionError,
@@ -18,7 +18,12 @@ from app.agent_runtime.state import (
     AgentAction,
     AgentState,
     AgentStatus,
+    CommuteOptimizationStatus,
+    CommuteReplacementRecord,
+    CommuteSupplementRecord,
     ConstraintOptimizationRecord,
+    ContentRefillRecord,
+    ContentRefillStatus,
     ExecutionBudget,
     PlanNormalizationRecord,
     RouteOptimizationRecord,
@@ -44,7 +49,12 @@ __all__ = [
     "AgentStatus",
     "CircuitBreaker",
     "CircuitState",
+    "CommuteOptimizationStatus",
+    "CommuteReplacementRecord",
+    "CommuteSupplementRecord",
     "ConstraintOptimizationRecord",
+    "ContentRefillRecord",
+    "ContentRefillStatus",
     "ExecutionBudget",
     "PlanNormalizationRecord",
     "ExecutionPolicy",

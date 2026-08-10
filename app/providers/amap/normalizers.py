@@ -270,7 +270,7 @@ def _nonnegative_int(value: Any) -> int | None:
 
 
 def normalize_city_code(payload: dict[str, Any]) -> str:
-    """Extract citycode from an Amap district lookup response."""
+    """从高德行政区查询结果中提取 citycode。"""
 
     districts = payload.get("districts")
     if not isinstance(districts, list):
@@ -290,7 +290,7 @@ def normalize_route(
     leg: RouteLegRequest,
     mode: RouteMode,
 ) -> RouteEstimate:
-    """Normalize the preferred Route Planning 2.0 path into stable metrics."""
+    """把高德路线规划 2.0 的首选路径转换成稳定路线指标。"""
 
     route = payload.get("route")
     route_object = route if isinstance(route, dict) else {}

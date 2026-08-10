@@ -1,3 +1,5 @@
+"""按地点名称查询 Unsplash 图片的轻量工具。"""
+
 import os
 import requests
 from dotenv import load_dotenv

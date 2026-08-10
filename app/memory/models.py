@@ -1,4 +1,4 @@
-"""Public models for inspecting persisted agent sessions."""
+"""查询和展示持久化智能体会话使用的公共模型。"""
 
 from datetime import datetime
 

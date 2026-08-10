@@ -1,4 +1,4 @@
-"""Deterministic trip schedule evaluation and optimization."""
+"""确定性行程时间轴评估与优化组件。"""
 
 from app.scheduling.models import (
     DayScheduleQuality,

@@ -1,4 +1,4 @@
-"""Deterministic validation primitives for travel plans."""
+"""旅行计划确定性校验的公共模型与服务。"""
 
 from app.validation.models import (
     TripValidationResult,

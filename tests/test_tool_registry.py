@@ -3,6 +3,7 @@ import unittest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
+from app.providers.amap import AmapClient, AmapProviderClient, GeoPoint
 from app.tools import (
     ToolDefinition,
     ToolErrorType,
@@ -195,6 +196,119 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertEqual(registry.llm_call_cost("generate_plan"), 1)
         self.assertEqual(registry.llm_call_cost("repair_plan"), 1)
 
+    def test_nearby_attraction_tool_uses_standardized_provider_without_llm(self):
+        class RawProvider:
+            calls = []
+
+            @classmethod
+            def around_search(
+                cls,
+                *,
+                location,
+                city,
+                keywords,
+                radius_meters,
+                page,
+                page_size,
+            ):
+                cls.calls.append(
+                    (location, city, keywords, radius_meters, page, page_size)
+                )
+                return {
+                    "status": "1",
+                    "info": "OK",
+                    "pois": [
+                        {
+                            "id": "nearby-1",
+                            "name": "West Lake Culture Square",
+                            "address": "Downtown",
+                            "location": "120.165,30.275",
+                            "type": "scenic attraction",
+                            "biz_ext": {"rating": "4.7"},
+                        }
+                    ],
+                }
+
+            @staticmethod
+            def text_search(*, keywords, city):
+                return {"status": "1", "info": "OK", "pois": []}
+
+            @staticmethod
+            def get_weather(city):
+                return {"status": "1", "info": "OK", "forecasts": []}
+
+        provider = AmapProviderClient(raw_client=RawProvider)
+        registry = build_trip_tool_registry(
+            planner_agent=object(),
+            map_provider=provider,
+        )
+        payload = {
+            "city": "Hangzhou",
+            "keywords": "nature",
+            "center": {"longitude": 120.16, "latitude": 30.25},
+            "radius_meters": 5000,
+            "page": 2,
+            "page_size": 12,
+            "day_index": 0,
+            "attraction_index": 1,
+            "target_attraction_name": "Remote Place",
+            "anchor_names": ["West Lake", "Hotel"],
+        }
+
+        result = registry.execute("supplement_attractions", payload)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["provider"], "amap")
+        self.assertEqual(result.data["center"], payload["center"])
+        self.assertEqual(result.data["radius_meters"], 5000)
+        self.assertEqual(result.data["page"], 2)
+        self.assertEqual(result.data["page_size"], 12)
+        self.assertEqual(result.data["candidates"][0]["poi_id"], "nearby-1")
+        self.assertNotIn("pois", result.data)
+        self.assertEqual(registry.llm_call_cost("supplement_attractions"), 0)
+        call = RawProvider.calls[-1]
+        self.assertEqual(call[0], GeoPoint(longitude=120.16, latitude=30.25))
+        self.assertEqual(call[1:], ("Hangzhou", "nature", 5000, 2, 12))
+
+    def test_raw_amap_around_search_uses_distance_sorted_bounded_parameters(self):
+        captured = {}
+
+        class Response:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"status": "1", "pois": []}
+
+        previous = AmapClient.http_get
+
+        def fake_get(url, *, params, timeout):
+            captured.update(url=url, params=params, timeout=timeout)
+            return Response()
+
+        AmapClient.http_get = staticmethod(fake_get)
+        try:
+            AmapClient.around_search(
+                location=GeoPoint(longitude=120.16, latitude=30.25),
+                city="Hangzhou",
+                keywords="attraction",
+                radius_meters=60000,
+                page=0,
+                page_size=30,
+            )
+        finally:
+            AmapClient.http_get = previous
+
+        self.assertTrue(captured["url"].endswith("/v3/place/around"))
+        self.assertEqual(captured["params"]["location"], "120.160000,30.250000")
+        self.assertEqual(captured["params"]["citylimit"], "true")
+        self.assertEqual(captured["params"]["sortrule"], "distance")
+        self.assertEqual(captured["params"]["radius"], 50000)
+        self.assertEqual(captured["params"]["offset"], 25)
+        self.assertEqual(captured["params"]["page"], 1)
+
     def test_empty_route_batch_returns_without_provider_call(self):
         class Provider:
             @staticmethod
@@ -271,6 +385,7 @@ class ToolRegistryTests(unittest.TestCase):
             {item["name"] for item in response.json()},
             {
                 "search_attractions",
+                "supplement_attractions",
                 "get_weather",
                 "search_hotels",
                 "estimate_routes",
@@ -279,6 +394,10 @@ class ToolRegistryTests(unittest.TestCase):
             },
         )
         self.assertEqual(main.trip_tool_registry.llm_call_cost("search_attractions"), 0)
+        self.assertEqual(
+            main.trip_tool_registry.llm_call_cost("supplement_attractions"),
+            0,
+        )
         self.assertEqual(main.trip_tool_registry.llm_call_cost("get_weather"), 0)
         self.assertEqual(main.trip_tool_registry.llm_call_cost("search_hotels"), 0)
         self.assertEqual(main.trip_tool_registry.llm_call_cost("estimate_routes"), 0)

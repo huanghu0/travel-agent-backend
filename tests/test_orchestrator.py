@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 
+from app.commute import CommuteConstraintEvaluator
 from app.agent_runtime import (
     AgentAction,
     AgentActionError,
@@ -9,6 +10,7 @@ from app.agent_runtime import (
     TripOrchestrator,
 )
 from app.constraints import ConstraintEvaluator, constraint_plan_fingerprint
+from app.plan_content import plan_content_source_fingerprint
 from app.routing import plan_route_fingerprint
 from app.schemas.trip_schema import TripPlan, TripPlanResponse, TripRequest
 from app.scheduling import ScheduleTimelineEvaluator
@@ -125,7 +127,7 @@ def make_orchestrator(
     attraction_responses=None,
     planner_response=None,
     repair_responses=None,
-    max_steps=12,
+    max_steps=16,
     max_attempts_per_action=2,
     max_repair_attempts=2,
 ):
@@ -164,6 +166,8 @@ class TripOrchestratorTests(unittest.TestCase):
                 AgentAction.SEARCH_HOTELS,
                 AgentAction.GENERATE_PLAN,
                 AgentAction.ESTIMATE_ROUTES,
+                AgentAction.EVALUATE_COMMUTE,
+                AgentAction.REBUILD_PLAN_CONTENT,
                 AgentAction.EVALUATE_CONSTRAINTS,
                 AgentAction.VALIDATE_PLAN,
                 AgentAction.FINISH,
@@ -180,7 +184,7 @@ class TripOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(state.status, "completed")
         self.assertTrue(state.finished)
-        self.assertEqual(state.current_step, 8)
+        self.assertEqual(state.current_step, 10)
         self.assertEqual(state.session_id, "session-test")
         self.assertEqual(state.trip_plan.city, "成都")
         self.assertTrue(state.last_validation_result.valid)
@@ -217,6 +221,17 @@ class TripOrchestratorTests(unittest.TestCase):
         TripOrchestrator._refresh_route_quality(state)
         self.assertEqual(
             TripOrchestrator.decide_next_action(state),
+            AgentAction.EVALUATE_COMMUTE,
+        )
+        state.commute_report = CommuteConstraintEvaluator().evaluate(
+            state.request,
+            state.trip_plan,
+            state.route_estimates,
+        )
+        state.commute_plan_fingerprint = fingerprint
+        state.commute_optimization_status = "skipped"
+        self.assertEqual(
+            TripOrchestrator.decide_next_action(state),
             AgentAction.EVALUATE_SCHEDULE,
         )
         state.schedule_quality_report = ScheduleTimelineEvaluator().evaluate(
@@ -226,6 +241,16 @@ class TripOrchestratorTests(unittest.TestCase):
         )
         state.schedule_quality_plan_fingerprint = fingerprint
         state.schedule_optimization_status = "skipped"
+        self.assertEqual(
+            TripOrchestrator.decide_next_action(state),
+            AgentAction.REBUILD_PLAN_CONTENT,
+        )
+        state.plan_consistency_fingerprint = plan_content_source_fingerprint(
+            state.request,
+            state.trip_plan,
+            state.route_estimates,
+            state.schedule_quality_report,
+        )
         self.assertEqual(
             TripOrchestrator.decide_next_action(state),
             AgentAction.EVALUATE_CONSTRAINTS,
@@ -279,10 +304,14 @@ class TripOrchestratorTests(unittest.TestCase):
                 AgentAction.SEARCH_HOTELS,
                 AgentAction.GENERATE_PLAN,
                 AgentAction.ESTIMATE_ROUTES,
+                AgentAction.EVALUATE_COMMUTE,
+                AgentAction.REBUILD_PLAN_CONTENT,
                 AgentAction.EVALUATE_CONSTRAINTS,
                 AgentAction.VALIDATE_PLAN,
                 AgentAction.REPAIR_PLAN,
                 AgentAction.ESTIMATE_ROUTES,
+                AgentAction.EVALUATE_COMMUTE,
+                AgentAction.REBUILD_PLAN_CONTENT,
                 AgentAction.EVALUATE_CONSTRAINTS,
                 AgentAction.VALIDATE_PLAN,
                 AgentAction.FINISH,

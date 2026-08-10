@@ -16,7 +16,7 @@ ResultValidator = Callable[[Any], Any]
 
 
 class ToolResultError(RuntimeError):
-    """A known tool/output failure with explicit retry semantics."""
+    """具有明确重试语义的已知工具或输出错误。"""
 
     def __init__(
         self,
@@ -47,7 +47,7 @@ class ToolDefinition:
 
 
 class ToolRegistry:
-    """Register and execute only explicitly approved tools."""
+    """只注册和执行明确加入白名单的工具。"""
 
     def __init__(self):
         self._tools: dict[str, ToolDefinition] = {}
@@ -75,7 +75,7 @@ class ToolRegistry:
         return list(self._tools)
 
     def llm_call_cost(self, name: str) -> int:
-        """Return the declared logical LLM request cost for a tool call."""
+        """返回一次工具调用声明的逻辑 LLM 请求成本。"""
 
         definition = self._tools.get(name)
         return max(0, definition.llm_call_cost) if definition is not None else 0

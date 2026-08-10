@@ -71,6 +71,15 @@ class AttractionSearchResult(BaseModel):
     candidates: list[AttractionCandidate] = Field(default_factory=list)
 
 
+class NearbyAttractionSearchResult(AttractionSearchResult):
+    """一次有界周边搜索返回的标准化景点 POI。"""
+
+    center: GeoPoint
+    radius_meters: int = Field(ge=100, le=50000)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=25)
+
+
 class HotelSearchResult(BaseModel):
     """酒店查询的稳定、已裁剪输出。"""
 
@@ -101,7 +110,7 @@ RouteLegType = Literal[
 
 
 class RoutePoint(BaseModel):
-    """One route endpoint; POI ID and city code improve route accuracy."""
+    """一个路线端点；POI ID 和城市编码用于提高路线查询精度。"""
 
     name: str = Field(min_length=1)
     location: GeoPoint
@@ -110,7 +119,7 @@ class RoutePoint(BaseModel):
 
 
 class RouteLegRequest(BaseModel):
-    """One deterministic route leg between adjacent attractions on the same day."""
+    """同一天内酒店和相邻景点之间的一条确定性路线分段请求。"""
 
     day_index: int = Field(ge=0)
     leg_index: int = Field(ge=0)
@@ -122,7 +131,7 @@ class RouteLegRequest(BaseModel):
 
 
 class RouteEstimate(BaseModel):
-    """One normalized route returned by Amap Route Planning 2.0."""
+    """高德路线规划 2.0 返回的一条标准化路线结果。"""
 
     provider: Literal["amap"] = "amap"
     day_index: int = Field(ge=0)
@@ -141,7 +150,7 @@ class RouteEstimate(BaseModel):
 
 
 class RouteEstimateResult(BaseModel):
-    """Real route estimates for one plan, including provider-side cropping counts."""
+    """一个行程的真实路线结果，包含请求、评估和供应商裁剪数量。"""
 
     provider: Literal["amap"] = "amap"
     plan_fingerprint: str = Field(min_length=1)

@@ -1,4 +1,4 @@
-"""Deterministic scoring for real route estimates attached to a trip plan."""
+"""对行程关联的高德真实路线进行确定性质量评分。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ LOW_QUALITY_SCORE = 60.0
 
 
 class RouteDayQuality(BaseModel):
-    """Quality metrics for all hotel and attraction route legs in one day."""
+    """单日酒店与景点全部路线分段的质量指标。"""
 
     day_index: int = Field(ge=0)
     date: str = ""
@@ -39,7 +39,7 @@ class RouteDayQuality(BaseModel):
 
 
 class RouteQualityReport(BaseModel):
-    """Stable route-quality snapshot tied to one plan fingerprint."""
+    """与指定行程指纹绑定的稳定路线质量快照。"""
 
     plan_fingerprint: str = Field(min_length=1)
     total_legs: int = Field(default=0, ge=0)
@@ -75,7 +75,7 @@ def evaluate_route_quality(
     plan: TripPlan,
     route_result: RouteEstimateResult | dict,
 ) -> RouteQualityReport:
-    """Score every expected hotel and attraction leg; missing legs receive a penalty."""
+    """对所有预期酒店和景点路线评分，缺失路线会获得惩罚成本。"""
 
     result = (
         route_result
@@ -178,7 +178,7 @@ def route_quality_improvement_percent(
     before: RouteQualityReport,
     after: RouteQualityReport,
 ) -> float:
-    """Return positive cost reduction as a percentage of the baseline cost."""
+    """返回相对于基线成本的正向下降百分比。"""
 
     if before.optimization_cost <= 0:
         return 0.0
@@ -194,7 +194,7 @@ def is_route_quality_improvement(
     *,
     min_improvement_percent: float = 10.0,
 ) -> bool:
-    """Accept only material improvements that do not worsen hard route failures."""
+    """只接受有实际改善且不会恶化硬性路线失败的候选。"""
 
     return bool(
         after.optimization_cost < before.optimization_cost

@@ -100,6 +100,34 @@ trip_orchestrator = TripOrchestrator(
     constraint_daily_attraction_soft_limit=(
         settings.CONSTRAINT_DAILY_ATTRACTION_SOFT_LIMIT
     ),
+    max_commute_replacement_attempts=(
+        settings.AGENT_MAX_COMMUTE_REPLACEMENT_ATTEMPTS
+    ),
+    commute_replacement_max_candidates=(
+        settings.COMMUTE_REPLACEMENT_MAX_CANDIDATES
+    ),
+    max_commute_supplement_searches=(
+        settings.AGENT_MAX_COMMUTE_SUPPLEMENT_SEARCHES
+    ),
+    commute_supplement_initial_radius_meters=(
+        settings.COMMUTE_SUPPLEMENT_INITIAL_RADIUS_METERS
+    ),
+    commute_supplement_max_radius_meters=(
+        settings.COMMUTE_SUPPLEMENT_MAX_RADIUS_METERS
+    ),
+    commute_supplement_page_size=settings.COMMUTE_SUPPLEMENT_PAGE_SIZE,
+    commute_supplement_pool_max_candidates=(
+        settings.COMMUTE_SUPPLEMENT_POOL_MAX_CANDIDATES
+    ),
+    commute_max_walking_minutes=settings.COMMUTE_MAX_WALKING_MINUTES,
+    commute_max_transit_minutes=settings.COMMUTE_MAX_TRANSIT_MINUTES,
+    commute_max_driving_minutes=settings.COMMUTE_MAX_DRIVING_MINUTES,
+    minimum_total_attractions=settings.AGENT_MIN_TOTAL_ATTRACTIONS,
+    max_content_refill_attempts=settings.AGENT_MAX_CONTENT_REFILL_ATTEMPTS,
+    content_refill_max_candidates=settings.CONTENT_REFILL_MAX_CANDIDATES,
+    content_refill_default_visit_duration_minutes=(
+        settings.CONTENT_REFILL_DEFAULT_VISIT_DURATION_MINUTES
+    ),
     max_duration_seconds=settings.AGENT_MAX_DURATION_SECONDS,
     max_tool_calls=settings.AGENT_MAX_TOOL_CALLS,
     max_llm_calls=settings.AGENT_MAX_LLM_CALLS,
@@ -118,11 +146,16 @@ _STAGE_NAMES = {
     "search_hotels": "酒店搜索",
     "generate_plan": "行程生成",
     "estimate_routes": "路线查询",
+    "evaluate_commute": "\u5355\u6bb5\u901a\u52e4\u8bc4\u4f30",
+    "replace_remote_attraction": "\u8fc7\u8fdc\u666f\u70b9\u66ff\u6362",
+    "supplement_attractions": "\u9ad8\u5fb7\u5468\u8fb9\u5019\u9009\u8865\u5145",
     "optimize_routes": "路线优化",
     "evaluate_schedule": "时间轴评估",
     "optimize_schedule": "日程优化",
     "evaluate_constraints": "\u53ef\u6267\u884c\u6027\u7ea6\u675f\u8bc4\u4f30",
     "optimize_constraints": "\u7ea6\u675f\u51b2\u7a81\u4f18\u5316",
+    "refill_attractions": "\u6700\u4f4e\u666f\u70b9\u4fdd\u969c",
+    "rebuild_plan_content": "\u884c\u7a0b\u5185\u5bb9\u4e00\u81f4\u6027\u91cd\u5efa",
     "validate_plan": "行程校验",
     "repair_plan": "行程修复",
     "finish": "完成",

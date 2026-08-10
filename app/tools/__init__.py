@@ -1,4 +1,4 @@
-"""Tool implementations and the safe tool registry."""
+"""旅行工具实现以及安全的工具白名单注册中心。"""
 
 from app.tools.models import ActionResult, ToolDescriptor, ToolErrorType
 from app.tools.registry import ToolDefinition, ToolRegistry, ToolResultError

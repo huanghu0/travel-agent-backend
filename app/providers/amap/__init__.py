@@ -1,4 +1,4 @@
-﻿"""高德地图 Provider：负责传输、错误适配和稳定输出模型。"""
+"""高德地图 Provider：负责传输、错误适配和稳定输出模型。"""
 
 from app.providers.amap.client import AmapClient, AmapProviderClient
 from app.providers.amap.errors import AmapErrorKind, AmapProviderError
@@ -9,6 +9,7 @@ from app.providers.amap.models import (
     GeoPoint,
     HotelCandidate,
     HotelSearchResult,
+    NearbyAttractionSearchResult,
     RouteEstimate,
     RouteEstimateResult,
     RouteLegRequest,
@@ -28,6 +29,7 @@ __all__ = [
     "GeoPoint",
     "HotelCandidate",
     "HotelSearchResult",
+    "NearbyAttractionSearchResult",
     "RouteCache",
     "RouteEstimate",
     "RouteEstimateResult",

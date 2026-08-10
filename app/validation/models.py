@@ -1,4 +1,4 @@
-"""Structured models produced by deterministic trip-plan validation."""
+"""旅行计划确定性校验输出的结构化模型。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class ValidationSeverity(str, Enum):
 
 
 class ValidationIssue(BaseModel):
-    """One actionable semantic problem found in a generated TripPlan."""
+    """行程中发现的一项可定位、可执行修复的语义问题。"""
 
     code: str
     severity: ValidationSeverity
@@ -32,7 +32,7 @@ class ValidationIssue(BaseModel):
 
 
 class TripValidationResult(BaseModel):
-    """Complete result of one deterministic validation pass."""
+    """一次确定性校验的完整结果。"""
 
     valid: bool
     repairable: bool

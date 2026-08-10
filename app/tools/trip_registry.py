@@ -11,7 +11,9 @@ from app.providers.amap.errors import AmapProviderError, validate_amap_response
 from app.providers.amap.route_cache import RouteCache
 from app.providers.amap.models import (
     AttractionSearchResult,
+    GeoPoint,
     HotelSearchResult,
+    NearbyAttractionSearchResult,
     RouteEstimate,
     RouteEstimateResult,
     RouteLegRequest,
@@ -26,6 +28,19 @@ from app.validation import TripValidationResult
 class SearchAttractionsInput(BaseModel):
     city: str = Field(min_length=1)
     preferences: list[str] = Field(default_factory=list)
+
+
+class SupplementAttractionsInput(BaseModel):
+    city: str = Field(min_length=1)
+    keywords: str = Field(min_length=1)
+    center: GeoPoint
+    radius_meters: int = Field(ge=100, le=50000)
+    page: int = Field(default=1, ge=1, le=100)
+    page_size: int = Field(default=20, ge=1, le=25)
+    day_index: int = Field(ge=0)
+    attraction_index: int = Field(ge=0)
+    target_attraction_name: str = Field(min_length=1)
+    anchor_names: list[str] = Field(default_factory=list)
 
 
 class GetWeatherInput(BaseModel):
@@ -144,6 +159,31 @@ def build_trip_tool_registry(
         attraction_validator = validate_map_result
         attraction_llm_cost = 1
 
+    def supplement_attractions(
+        value: SupplementAttractionsInput,
+    ) -> NearbyAttractionSearchResult:
+        searcher = getattr(provider, "search_nearby_attractions", None)
+        if not callable(searcher):
+            return NearbyAttractionSearchResult(
+                query_city=value.city,
+                keywords=value.keywords,
+                candidates=[],
+                center=value.center,
+                radius_meters=value.radius_meters,
+                page=value.page,
+                page_size=value.page_size,
+            )
+        return _call_amap(
+            lambda: searcher(
+                city=value.city,
+                keywords=value.keywords,
+                center=value.center,
+                radius_meters=value.radius_meters,
+                page=value.page,
+                page_size=value.page_size,
+            )
+        )
+
     if weather_agent is None:
         def get_weather(value: GetWeatherInput) -> WeatherSearchResult:
             return _call_amap(lambda: provider.get_weather(value.city))
@@ -174,7 +214,7 @@ def build_trip_tool_registry(
 
     # 步骤 2：定义真实路线查询处理器；短行程直接返回空结果，避免无效 HTTP。
     def estimate_routes(value: EstimateRoutesInput) -> RouteEstimateResult:
-        # Plans with fewer than two attractions need no external route request.
+        # 没有可连接地点的短行程不需要发起外部路线请求。
         if not value.legs:
             return RouteEstimateResult(
                 plan_fingerprint=value.plan_fingerprint,
@@ -193,7 +233,7 @@ def build_trip_tool_registry(
                 )
             )
 
-        # Compatibility for injected standardized providers without route support.
+        # 兼容没有实现路线查询能力的已注入标准化 Provider。
         routes = [
             RouteEstimate(
                 day_index=leg.day_index,
@@ -229,6 +269,17 @@ def build_trip_tool_registry(
             invalid_output_retryable=True,
             result_validator=attraction_validator,
             llm_call_cost=attraction_llm_cost,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="supplement_attractions",
+            description="Search standardized Amap attraction candidates around commute anchors",
+            input_model=SupplementAttractionsInput,
+            handler=supplement_attractions,
+            output_model=NearbyAttractionSearchResult,
+            invalid_output_retryable=True,
+            llm_call_cost=0,
         )
     )
     registry.register(

@@ -1,4 +1,4 @@
-﻿"""Exceptions raised by the deterministic agent runtime."""
+﻿"""确定性智能体运行时抛出的异常类型。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from app.agent_runtime.state import AgentAction, AgentState
 
 
 class AgentRuntimeError(RuntimeError):
-    """Base runtime error carrying the state at the failure point."""
+    """携带失败时 AgentState 快照的运行时基础异常。"""
 
     def __init__(self, message: str, state: AgentState):
         super().__init__(message)
@@ -14,7 +14,7 @@ class AgentRuntimeError(RuntimeError):
 
 
 class AgentActionError(AgentRuntimeError):
-    """Raised after an action exhausts its allowed attempts."""
+    """某个动作耗尽允许的重试次数后抛出。"""
 
     def __init__(
         self,
@@ -30,11 +30,11 @@ class AgentActionError(AgentRuntimeError):
 
 
 class AgentMaxStepsError(AgentRuntimeError):
-    """Raised when the bounded loop cannot reach FINISH in time."""
+    """有界执行循环在最大步骤内未能到达 FINISH 时抛出。"""
 
 
 class AgentBudgetExceededError(AgentRuntimeError):
-    """Raised when a persisted lifetime execution budget is exhausted."""
+    """持久化的会话生命周期执行预算耗尽时抛出。"""
 
     def __init__(self, reason: str, state: AgentState):
         super().__init__(reason, state)

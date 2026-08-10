@@ -19,7 +19,12 @@ from app.validation.models import (
 
 
 class TripPlanValidator:
-    """Validate a TripPlan without asking an LLM to make decisions."""
+    """不调用 LLM，对 TripPlan 执行确定性语义校验。"""
+
+    def __init__(self, *, minimum_total_attractions: int = 0):
+        if minimum_total_attractions < 0:
+            raise ValueError("minimum_total_attractions cannot be negative")
+        self.minimum_total_attractions = minimum_total_attractions
 
     def validate(
         self,
@@ -85,6 +90,7 @@ class TripPlanValidator:
         # 步骤 3：依次校验行程身份、每日安排、天气、预算、候选来源和路线距离。
         self._validate_plan_identity(request, plan, issues)
         self._validate_days(request, plan, expected_dates, issues)
+        self._validate_minimum_content(request, plan, issues)
         self._validate_weather(plan, expected_dates, issues)
         self._validate_budget(plan, issues)
         self._validate_source_consistency(plan, attractions, hotels, issues)
@@ -304,6 +310,30 @@ class TripPlanValidator:
                         actual={"longitude": longitude, "latitude": latitude},
                     )
 
+    def _validate_minimum_content(
+        self,
+        request: TripRequest,
+        plan: TripPlan,
+        issues: list[ValidationIssue],
+    ) -> None:
+        """一日游至少保留一个景点，多日游至少保留两个景点。"""
+
+        required = min(self.minimum_total_attractions, max(1, request.travel_days))
+        actual = sum(len(day.attractions) for day in plan.days)
+        if actual >= required:
+            return
+        code = "plan.no_attractions" if actual == 0 else "plan.insufficient_attractions"
+        self._error(
+            issues,
+            code=code,
+            path="days",
+            message=f"\u5b8c\u6574\u884c\u7a0b\u81f3\u5c11\u9700\u8981\u5b89\u6392 {required} \u4e2a\u666f\u70b9\uff0c\u5f53\u524d\u53ea\u6709 {actual} \u4e2a",
+            repair_hint="\u4ece\u5df2\u83b7\u53d6\u4e14\u672a\u4f7f\u7528\u7684\u5019\u9009 POI \u4e2d\u56de\u586b\u8fd1\u8ddd\u79bb\u666f\u70b9\uff0c\u5e76\u91cd\u65b0\u8bc4\u4f30\u771f\u5b9e\u8def\u7ebf\u4e0e\u65f6\u95f4\u8f74",
+            repairable=False,
+            expected=f">= {required}",
+            actual=actual,
+        )
+
     def _validate_weather(
         self,
         plan: TripPlan,
@@ -425,7 +455,7 @@ class TripPlanValidator:
         issues: list[ValidationIssue],
         route_estimates: dict[str, Any] | RouteEstimateResult | None,
     ) -> None:
-        """Prefer real Amap metrics and fall back to Haversine when unavailable."""
+        """优先使用高德真实路线指标，不可用时回退到 Haversine 直线距离。"""
 
         route_lookup = self._route_estimate_lookup(route_estimates)
         for day_position, day in enumerate(plan.days):
@@ -514,7 +544,7 @@ class TripPlanValidator:
         issues: list[ValidationIssue],
         schedule_quality_report: ScheduleQualityReport | dict | None,
     ) -> None:
-        """Expose unresolved daily overtime to the existing repair loop."""
+        """把尚未解决的每日超时问题暴露给现有修复循环。"""
 
         if schedule_quality_report is None:
             return
@@ -552,7 +582,7 @@ class TripPlanValidator:
         issues: list[ValidationIssue],
         constraint_report: TripConstraintReport | dict | None,
     ) -> None:
-        """Expose unresolved feasibility conflicts to the existing repair loop."""
+        """把尚未解决的可执行性冲突暴露给现有修复循环。"""
 
         if constraint_report is None:
             return

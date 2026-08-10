@@ -1,4 +1,4 @@
-"""Deterministic normalization applied to every LLM-produced trip plan."""
+"""对每份 LLM 行程结果执行的确定性标准化。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from app.schemas.trip_schema import Attraction, TripPlan
 
 
 def attraction_identity(attraction: Attraction) -> str:
-    """Return a stable POI identity, falling back to a normalized name."""
+    """优先使用 POI ID 生成稳定标识，缺失时回退到标准化名称。"""
 
     poi_id = str(attraction.poi_id or "").strip().lower()
     if poi_id:
@@ -16,11 +16,10 @@ def attraction_identity(attraction: Attraction) -> str:
 
 
 def remove_duplicate_attractions(plan: TripPlan) -> tuple[TripPlan, list[tuple[str, str]]]:
-    """Keep the first occurrence of each attraction and remove later duplicates.
+    """保留每个景点的首次出现，并移除后续重复项。
 
-    The LLM may reintroduce duplicates during either initial generation or repair.
-    Normalizing immediately keeps route queries and later deterministic evaluators from
-    spending budget on a plan that is already known to be invalid.
+    LLM 在首次生成或修复时都可能重新引入重复景点。尽早标准化可以避免
+    路线查询和后续确定性评估器在已知无效的行程上继续消耗预算。
     """
 
     normalized = plan.model_copy(deep=True)

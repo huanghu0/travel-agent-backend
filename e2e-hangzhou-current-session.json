@@ -1,0 +1,1336 @@
+{
+  "state_version": 10,
+  "session_id": "56a22501-f892-4fdc-aedb-61f68c35455c",
+  "request": {
+    "city": "杭州",
+    "start_date": "2026-08-10",
+    "end_date": "2026-08-12",
+    "travel_days": 3,
+    "transportation": "公共交通",
+    "accommodation": "经济型酒店",
+    "preferences": [
+      "休闲",
+      "自然风光"
+    ],
+    "free_text_input": ""
+  },
+  "status": "completed",
+  "current_step": 12,
+  "max_steps": 24,
+  "max_repair_attempts": 2,
+  "repair_count": 0,
+  "finished": true,
+  "created_at": "2026-08-10T05:58:56.659368Z",
+  "updated_at": "2026-08-10T05:59:48.683070Z",
+  "started_at": "2026-08-10T05:58:56.659368Z",
+  "deadline_at": "2026-08-10T06:01:56.659368Z",
+  "execution_budget": {
+    "max_steps": 24,
+    "max_duration_seconds": 180.0,
+    "max_tool_calls": 15,
+    "max_llm_calls": 6,
+    "max_repair_attempts": 2,
+    "max_route_optimization_attempts": 1,
+    "max_schedule_optimization_attempts": 1,
+    "max_constraint_optimization_attempts": 1,
+    "max_content_refill_attempts": 2,
+    "minimum_total_attractions": 2
+  },
+  "tool_call_count": 6,
+  "llm_call_count": 1,
+  "total_retry_count": 0,
+  "total_duration_ms": 52024,
+  "total_retry_delay_ms": 0,
+  "budget_exhausted_reason": null,
+  "attractions": {
+    "provider": "amap",
+    "query_city": "杭州",
+    "keywords": "休闲,自然风光",
+    "total_received": 10,
+    "candidates": [
+      {
+        "poi_id": "B023B07SNT",
+        "name": "湘湖国家旅游度假区",
+        "address": "湘湖路132号",
+        "location": {
+          "longitude": 120.217125,
+          "latitude": 30.13226
+        },
+        "district": "萧山区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.8,
+        "telephone": "0571-82360666",
+        "category": "风景名胜;风景名胜;国家级景点",
+        "opening_hours": "",
+        "closed_dates": []
+      },
+      {
+        "poi_id": "B023B05MLT",
+        "name": "杭州西湖风景名胜区-湖滨公园",
+        "address": "龙井路1号杭州西湖风景名胜区内(东北角)",
+        "location": {
+          "longitude": 120.158818,
+          "latitude": 30.256583
+        },
+        "district": "上城区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.7,
+        "telephone": "",
+        "category": "风景名胜;公园广场;公园",
+        "opening_hours": "",
+        "closed_dates": []
+      },
+      {
+        "poi_id": "B0FFGB9GDO",
+        "name": "桐洲岛",
+        "address": "桐董线附近",
+        "location": {
+          "longitude": 119.802977,
+          "latitude": 29.883983
+        },
+        "district": "富阳区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.7,
+        "telephone": "15695887255",
+        "category": "风景名胜;风景名胜;风景名胜",
+        "opening_hours": "",
+        "closed_dates": []
+      },
+      {
+        "poi_id": "B0FFFAFA73",
+        "name": "千岛湖风景区中心湖区",
+        "address": "千岛湖镇梦姑路348号",
+        "location": {
+          "longitude": 119.005926,
+          "latitude": 29.596547
+        },
+        "district": "淳安县",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.6,
+        "telephone": "0571-64825012",
+        "category": "风景名胜;风景名胜;风景名胜",
+        "opening_hours": "",
+        "closed_dates": []
+      },
+      {
+        "poi_id": "B0FFF3O4WK",
+        "name": "千岛湖九龙溪漂流",
+        "address": "左口乡显后村",
+        "location": {
+          "longitude": 119.05351,
+          "latitude": 29.723704
+        },
+        "district": "淳安县",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.6,
+        "telephone": "13588332414",
+        "category": "体育休闲服务;休闲场所;水上活动中心|风景名胜;风景名胜相关;旅游景点",
+        "opening_hours": "",
+        "closed_dates": []
+      },
+      {
+        "poi_id": "B0I1R76JNZ",
+        "name": "千岛湖天屿景区",
+        "address": "阳光路613号",
+        "location": {
+          "longitude": 119.046159,
+          "latitude": 29.630697
+        },
+        "district": "淳安县",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.6,
+        "telephone": "0571-65092099",
+        "category": "风景名胜;风景名胜;风景名胜",
+        "opening_hours": "",
+        "closed_dates": []
+      },
+      {
+        "poi_id": "B023B07SKH",
+        "name": "山沟沟旅游区",
+        "address": "鸬鸟镇太平山沟沟村下余65号",
+        "location": {
+          "longitude": 119.711177,
+          "latitude": 30.423485
+        },
+        "district": "余杭区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.5,
+        "telephone": "0571-88573188;0571-88573333",
+        "category": "风景名胜;风景名胜;省级景点",
+        "opening_hours": "",
+        "closed_dates": []
+      },
+      {
+        "poi_id": "B0FFHCZYAK",
+        "name": "芦茨湾",
+        "address": "富春江镇",
+        "location": {
+          "longitude": 119.672991,
+          "latitude": 29.688427
+        },
+        "district": "桐庐县",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.5,
+        "telephone": "",
+        "category": "风景名胜;风景名胜;风景名胜",
+        "opening_hours": "",
+        "closed_dates": []
+      }
+    ]
+  },
+  "weather": {
+    "provider": "amap",
+    "query_city": "杭州",
+    "city": "杭州市",
+    "province": "浙江",
+    "report_time": "2026-08-10 13:35:22",
+    "forecasts": [
+      {
+        "date": "2026-08-10",
+        "day_weather": "中雨",
+        "night_weather": "中雨",
+        "day_temp": 30.0,
+        "night_temp": 25.0,
+        "day_wind_direction": "东",
+        "night_wind_direction": "东",
+        "day_wind_power": "1-3",
+        "night_wind_power": "1-3"
+      },
+      {
+        "date": "2026-08-11",
+        "day_weather": "中雨",
+        "night_weather": "小雨",
+        "day_temp": 31.0,
+        "night_temp": 25.0,
+        "day_wind_direction": "东",
+        "night_wind_direction": "东",
+        "day_wind_power": "1-3",
+        "night_wind_power": "1-3"
+      },
+      {
+        "date": "2026-08-12",
+        "day_weather": "中雨",
+        "night_weather": "阴",
+        "day_temp": 30.0,
+        "night_temp": 24.0,
+        "day_wind_direction": "东北",
+        "night_wind_direction": "东北",
+        "day_wind_power": "1-3",
+        "night_wind_power": "1-3"
+      },
+      {
+        "date": "2026-08-13",
+        "day_weather": "小雨",
+        "night_weather": "小雨",
+        "day_temp": 31.0,
+        "night_temp": 24.0,
+        "day_wind_direction": "东北",
+        "night_wind_direction": "东北",
+        "day_wind_power": "1-3",
+        "night_wind_power": "1-3"
+      }
+    ]
+  },
+  "hotels": {
+    "provider": "amap",
+    "query_city": "杭州",
+    "keywords": "酒店",
+    "total_received": 10,
+    "candidates": [
+      {
+        "poi_id": "B0H63A81HK",
+        "name": "韶华卿卿青年旅舍(滨康路地铁站店)",
+        "address": "滨康路51-1号(滨康路地铁站G口步行310米)",
+        "location": {
+          "longitude": 120.230288,
+          "latitude": 30.180632
+        },
+        "district": "萧山区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.8,
+        "telephone": "15384060851",
+        "type": "住宿服务;住宿服务相关;住宿服务相关",
+        "estimated_cost": null
+      },
+      {
+        "poi_id": "B0FFIPINQ0",
+        "name": "蜂窝酒店(西湖南星桥地铁站店)",
+        "address": "秋涛路18号中针商务大厦3层",
+        "location": {
+          "longitude": 120.174923,
+          "latitude": 30.216352
+        },
+        "district": "上城区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.5,
+        "telephone": "0571-56076558;19157735518;+861056320612,10144933",
+        "type": "住宿服务;宾馆酒店;宾馆酒店",
+        "estimated_cost": null
+      },
+      {
+        "poi_id": "B0FFHDP24G",
+        "name": "可见时光·望达斯旅舍(杭州西湖湖滨河坊街店)",
+        "address": "小井巷21号(吴山广场地铁站D口步行360米)",
+        "location": {
+          "longitude": 120.168087,
+          "latitude": 30.239811
+        },
+        "district": "上城区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.3,
+        "telephone": "0571-86993935",
+        "type": "住宿服务;旅馆招待所;青年旅舍",
+        "estimated_cost": null
+      },
+      {
+        "poi_id": "B023B13PYP",
+        "name": "布丁严选酒店(杭州西湖湖滨河坊街店)",
+        "address": "高银街58号布丁严选酒店十竹斋艺术馆店",
+        "location": {
+          "longitude": 120.170263,
+          "latitude": 30.240774
+        },
+        "district": "上城区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.1,
+        "telephone": "0571-87078883",
+        "type": "住宿服务;宾馆酒店;经济型连锁酒店",
+        "estimated_cost": null
+      },
+      {
+        "poi_id": "B0FFGQ52IO",
+        "name": "时运商务酒店",
+        "address": "丰庆路与灯彩街交叉口都市水乡水映苑38-5号",
+        "location": {
+          "longitude": 120.095786,
+          "latitude": 30.328457
+        },
+        "district": "拱墅区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.1,
+        "telephone": "15268186362",
+        "type": "住宿服务;宾馆酒店;宾馆酒店",
+        "estimated_cost": null
+      },
+      {
+        "poi_id": "B023B0BCL8",
+        "name": "亚琦商务酒店(西湖清泰街店)",
+        "address": "清泰街456-1号",
+        "location": {
+          "longitude": 120.174873,
+          "latitude": 30.247756
+        },
+        "district": "上城区",
+        "city_code": "",
+        "adcode": "",
+        "rating": 4.0,
+        "telephone": "0571-87812201",
+        "type": "住宿服务;宾馆酒店;宾馆酒店",
+        "estimated_cost": null
+      }
+    ]
+  },
+  "trip_plan": {
+    "city": "杭州",
+    "start_date": "2026-08-10",
+    "end_date": "2026-08-12",
+    "days": [
+      {
+        "date": "2026-08-10",
+        "day_index": 0,
+        "description": "2026-08-10 按顺序游览湘湖国家旅游度假区，景点游览时间合计约180分钟。",
+        "transportation": "出行方式：公共交通；蜂窝酒店(西湖南星桥地铁站店)→湘湖国家旅游度假区（公共交通约36分钟，约13.2公里）；湘湖国家旅游度假区→蜂窝酒店(西湖南星桥地铁站店)（公共交通约38分钟，约13.3公里）。",
+        "accommodation": "入住蜂窝酒店(西湖南星桥地铁站店)（秋涛路18号中针商务大厦3层，预计260元/晚）。",
+        "hotel": {
+          "name": "蜂窝酒店(西湖南星桥地铁站店)",
+          "address": "秋涛路18号中针商务大厦3层",
+          "location": {
+            "longitude": 120.174923,
+            "latitude": 30.216352
+          },
+          "price_range": "220-320元",
+          "rating": "4.5",
+          "distance": "距离湖滨公园约5公里，前往地铁站和湘湖方向较方便",
+          "type": "经济型酒店",
+          "estimated_cost": 260
+        },
+        "attractions": [
+          {
+            "name": "湘湖国家旅游度假区",
+            "address": "湘湖路132号",
+            "location": {
+              "longitude": 120.217125,
+              "latitude": 30.13226
+            },
+            "visit_duration": 180,
+            "description": "午后乘地铁前往湘湖，选择湖畔步道进行轻松游览，感受湖泊、湿地与山水景观。中雨天气不建议乘坐无顶游船。",
+            "category": "风景名胜;风景名胜;国家级景点",
+            "rating": 4.8,
+            "photos": null,
+            "poi_id": "B023B07SNT",
+            "image_url": null,
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "breakfast",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近早餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排早餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 25
+          },
+          {
+            "type": "lunch",
+            "name": "湘湖国家旅游度假区附近午餐",
+            "address": "湘湖路132号",
+            "location": {
+              "longitude": 120.217125,
+              "latitude": 30.13226
+            },
+            "description": "围绕当天实际地点安排午餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 50
+          },
+          {
+            "type": "dinner",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近晚餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排晚餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 70
+          }
+        ]
+      },
+      {
+        "date": "2026-08-11",
+        "day_index": 1,
+        "description": "2026-08-11 暂无固定景点安排，可在酒店或市区周边自由活动并预留休息时间。",
+        "transportation": "当日无固定景点路线，市内活动建议使用公共交通。",
+        "accommodation": "入住蜂窝酒店(西湖南星桥地铁站店)（秋涛路18号中针商务大厦3层，预计260元/晚）。",
+        "hotel": {
+          "name": "蜂窝酒店(西湖南星桥地铁站店)",
+          "address": "秋涛路18号中针商务大厦3层",
+          "location": {
+            "longitude": 120.174923,
+            "latitude": 30.216352
+          },
+          "price_range": "220-320元",
+          "rating": "4.5",
+          "distance": "作为杭州主城区住宿点，需前往杭州东站或杭州西站换乘高铁前往千岛湖",
+          "type": "经济型酒店",
+          "estimated_cost": 260
+        },
+        "attractions": [],
+        "meals": [
+          {
+            "type": "breakfast",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近早餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排早餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 25
+          },
+          {
+            "type": "lunch",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近午餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排午餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 50
+          },
+          {
+            "type": "dinner",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近晚餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排晚餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 70
+          }
+        ]
+      },
+      {
+        "date": "2026-08-12",
+        "day_index": 2,
+        "description": "2026-08-12 按顺序游览桐洲岛，景点游览时间合计约150分钟。",
+        "transportation": "出行方式：公共交通；蜂窝酒店(西湖南星桥地铁站店)→桐洲岛（公共交通约143分钟，约63.8公里）。",
+        "accommodation": "当日未绑定具体酒店，按“经济型酒店”偏好自行确认住宿或返程。",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "桐洲岛",
+            "address": "桐董线附近",
+            "location": {
+              "longitude": 119.802977,
+              "latitude": 29.883983
+            },
+            "visit_duration": 150,
+            "description": "上午前往桐洲岛，欣赏富春江沿岸与岛屿自然景观，以散步和休闲观景为主。雨天不参加露营、皮划艇等户外水上活动。",
+            "category": "风景名胜;风景名胜;风景名胜",
+            "rating": 4.7,
+            "photos": null,
+            "poi_id": "B0FFGB9GDO",
+            "image_url": null,
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "breakfast",
+            "name": "蜂窝酒店(西湖南星桥地铁站店)附近早餐",
+            "address": "秋涛路18号中针商务大厦3层",
+            "location": {
+              "longitude": 120.174923,
+              "latitude": 30.216352
+            },
+            "description": "围绕当天实际地点安排早餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 25
+          },
+          {
+            "type": "lunch",
+            "name": "桐洲岛附近午餐",
+            "address": "桐董线附近",
+            "location": {
+              "longitude": 119.802977,
+              "latitude": 29.883983
+            },
+            "description": "围绕当天实际地点安排午餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 50
+          },
+          {
+            "type": "dinner",
+            "name": "桐洲岛附近晚餐",
+            "address": "桐董线附近",
+            "location": {
+              "longitude": 119.802977,
+              "latitude": 29.883983
+            },
+            "description": "围绕当天实际地点安排晚餐，优先选择步行可达且明码标价的餐馆。",
+            "estimated_cost": 70
+          }
+        ]
+      }
+    ],
+    "weather_info": [
+      {
+        "date": "2026-08-10",
+        "day_weather": "中雨",
+        "night_weather": "中雨",
+        "day_temp": 30,
+        "night_temp": 25,
+        "wind_direction": "东风",
+        "wind_power": "1-3级"
+      },
+      {
+        "date": "2026-08-11",
+        "day_weather": "中雨",
+        "night_weather": "小雨",
+        "day_temp": 31,
+        "night_temp": 25,
+        "wind_direction": "东风",
+        "wind_power": "1-3级"
+      },
+      {
+        "date": "2026-08-12",
+        "day_weather": "中雨",
+        "night_weather": "阴",
+        "day_temp": 30,
+        "night_temp": 24,
+        "wind_direction": "东北风",
+        "wind_power": "1-3级"
+      }
+    ],
+    "overall_suggestions": "本次行程包含湘湖国家旅游度假区、桐洲岛，请提前核对开放时间并按最终顺序出行。 当前时间轴无超时，仍建议每天预留机动时间。 市内交通按“公共交通”规划，费用与班次以出行当日实时信息为准。",
+    "budget": {
+      "total_attractions": 0,
+      "total_hotels": 520,
+      "total_meals": 435,
+      "total_transportation": 47,
+      "total": 1002
+    }
+  },
+  "route_estimates": {
+    "provider": "amap",
+    "plan_fingerprint": "69ee9746b066411ecf31319bbcddaf5589b84f24fd25145621d7d898df46a982",
+    "requested_legs": 3,
+    "evaluated_legs": 3,
+    "truncated_legs": 0,
+    "cache_hits": 2,
+    "cache_misses": 1,
+    "failed_legs": 0,
+    "routes": [
+      {
+        "provider": "amap",
+        "day_index": 0,
+        "leg_index": 0,
+        "leg_type": "hotel_departure",
+        "date": "2026-08-10",
+        "origin_name": "蜂窝酒店(西湖南星桥地铁站店)",
+        "destination_name": "湘湖国家旅游度假区",
+        "mode": "transit",
+        "available": true,
+        "distance_meters": 13209,
+        "duration_seconds": 2143,
+        "error_code": null,
+        "error_message": null,
+        "cache_hit": false
+      },
+      {
+        "provider": "amap",
+        "day_index": 0,
+        "leg_index": 0,
+        "leg_type": "hotel_return",
+        "date": "2026-08-10",
+        "origin_name": "湘湖国家旅游度假区",
+        "destination_name": "蜂窝酒店(西湖南星桥地铁站店)",
+        "mode": "transit",
+        "available": true,
+        "distance_meters": 13254,
+        "duration_seconds": 2263,
+        "error_code": null,
+        "error_message": null,
+        "cache_hit": true
+      },
+      {
+        "provider": "amap",
+        "day_index": 2,
+        "leg_index": 0,
+        "leg_type": "hotel_departure",
+        "date": "2026-08-12",
+        "origin_name": "蜂窝酒店(西湖南星桥地铁站店)",
+        "destination_name": "桐洲岛",
+        "mode": "transit",
+        "available": true,
+        "distance_meters": 63808,
+        "duration_seconds": 8544,
+        "error_code": null,
+        "error_message": null,
+        "cache_hit": true
+      }
+    ]
+  },
+  "route_plan_fingerprint": "69ee9746b066411ecf31319bbcddaf5589b84f24fd25145621d7d898df46a982",
+  "route_quality_report": {
+    "plan_fingerprint": "69ee9746b066411ecf31319bbcddaf5589b84f24fd25145621d7d898df46a982",
+    "total_legs": 3,
+    "available_legs": 3,
+    "unavailable_legs": 0,
+    "total_distance_meters": 90271,
+    "total_duration_seconds": 12950,
+    "excessive_duration_legs": 1,
+    "long_distance_legs": 1,
+    "optimization_cost": 21977.1,
+    "quality_score": 36.15,
+    "optimization_recommended": false,
+    "days": [
+      {
+        "day_index": 0,
+        "date": "2026-08-10",
+        "attraction_count": 1,
+        "leg_count": 2,
+        "available_legs": 2,
+        "unavailable_legs": 0,
+        "total_distance_meters": 26463,
+        "total_duration_seconds": 4406,
+        "longest_leg_index": 0,
+        "longest_duration_seconds": 2263,
+        "excessive_duration_legs": 0,
+        "long_distance_legs": 0,
+        "optimization_cost": 7052.3,
+        "quality_score": 61.28,
+        "optimization_recommended": false
+      },
+      {
+        "day_index": 1,
+        "date": "2026-08-11",
+        "attraction_count": 0,
+        "leg_count": 0,
+        "available_legs": 0,
+        "unavailable_legs": 0,
+        "total_distance_meters": 0,
+        "total_duration_seconds": 0,
+        "longest_leg_index": null,
+        "longest_duration_seconds": null,
+        "excessive_duration_legs": 0,
+        "long_distance_legs": 0,
+        "optimization_cost": 0.0,
+        "quality_score": 100.0,
+        "optimization_recommended": false
+      },
+      {
+        "day_index": 2,
+        "date": "2026-08-12",
+        "attraction_count": 1,
+        "leg_count": 1,
+        "available_legs": 1,
+        "unavailable_legs": 0,
+        "total_distance_meters": 63808,
+        "total_duration_seconds": 8544,
+        "longest_leg_index": 0,
+        "longest_duration_seconds": 8544,
+        "excessive_duration_legs": 1,
+        "long_distance_legs": 1,
+        "optimization_cost": 14924.8,
+        "quality_score": 12.58,
+        "optimization_recommended": false
+      }
+    ]
+  },
+  "route_quality_plan_fingerprint": "69ee9746b066411ecf31319bbcddaf5589b84f24fd25145621d7d898df46a982",
+  "route_optimization_count": 0,
+  "route_optimization_status": "skipped",
+  "route_optimization_candidate": null,
+  "route_optimization_baseline_plan": null,
+  "route_optimization_baseline_routes": null,
+  "route_optimization_baseline_quality": null,
+  "route_optimization_baseline_fingerprint": null,
+  "route_optimization_history": [],
+  "schedule_quality_report": {
+    "plan_fingerprint": "69ee9746b066411ecf31319bbcddaf5589b84f24fd25145621d7d898df46a982",
+    "feasible_days": 3,
+    "infeasible_days": 0,
+    "total_overtime_minutes": 0,
+    "fallback_route_legs": 0,
+    "total_transportation_minutes": 217,
+    "optimization_cost": 217.0,
+    "quality_score": 97.32,
+    "optimization_recommended": false,
+    "days": [
+      {
+        "day_index": 0,
+        "date": "2026-08-10",
+        "available_minutes": 540,
+        "attraction_minutes": 180,
+        "transportation_minutes": 74,
+        "meal_minutes": 60,
+        "break_minutes": 20,
+        "total_required_minutes": 334,
+        "free_minutes": 206,
+        "overtime_minutes": 0,
+        "fallback_route_legs": 0,
+        "optimization_cost": 74.0,
+        "quality_score": 97.26,
+        "feasible": true,
+        "timeline": [
+          {
+            "item_type": "transportation",
+            "name": "蜂窝酒店(西湖南星桥地铁站店) → 湘湖国家旅游度假区",
+            "start_time": "09:00",
+            "end_time": "09:36",
+            "duration_minutes": 36,
+            "day_index": 0,
+            "source_index": 0,
+            "transportation_time_source": "amap"
+          },
+          {
+            "item_type": "break",
+            "name": "路线机动缓冲",
+            "start_time": "09:36",
+            "end_time": "09:46",
+            "duration_minutes": 10,
+            "day_index": 0,
+            "source_index": 0,
+            "transportation_time_source": null
+          },
+          {
+            "item_type": "attraction",
+            "name": "湘湖国家旅游度假区",
+            "start_time": "09:46",
+            "end_time": "12:46",
+            "duration_minutes": 180,
+            "day_index": 0,
+            "source_index": 0,
+            "transportation_time_source": null
+          },
+          {
+            "item_type": "meal",
+            "name": "湖滨杭帮风味午餐",
+            "start_time": "12:46",
+            "end_time": "13:46",
+            "duration_minutes": 60,
+            "day_index": 0,
+            "source_index": null,
+            "transportation_time_source": null
+          },
+          {
+            "item_type": "transportation",
+            "name": "湘湖国家旅游度假区 → 蜂窝酒店(西湖南星桥地铁站店)",
+            "start_time": "13:46",
+            "end_time": "14:24",
+            "duration_minutes": 38,
+            "day_index": 0,
+            "source_index": 0,
+            "transportation_time_source": "amap"
+          },
+          {
+            "item_type": "break",
+            "name": "路线机动缓冲",
+            "start_time": "14:24",
+            "end_time": "14:34",
+            "duration_minutes": 10,
+            "day_index": 0,
+            "source_index": 0,
+            "transportation_time_source": null
+          }
+        ]
+      },
+      {
+        "day_index": 1,
+        "date": "2026-08-11",
+        "available_minutes": 540,
+        "attraction_minutes": 0,
+        "transportation_minutes": 0,
+        "meal_minutes": 0,
+        "break_minutes": 0,
+        "total_required_minutes": 0,
+        "free_minutes": 540,
+        "overtime_minutes": 0,
+        "fallback_route_legs": 0,
+        "optimization_cost": 0.0,
+        "quality_score": 100.0,
+        "feasible": true,
+        "timeline": []
+      },
+      {
+        "day_index": 2,
+        "date": "2026-08-12",
+        "available_minutes": 540,
+        "attraction_minutes": 150,
+        "transportation_minutes": 143,
+        "meal_minutes": 60,
+        "break_minutes": 10,
+        "total_required_minutes": 363,
+        "free_minutes": 177,
+        "overtime_minutes": 0,
+        "fallback_route_legs": 0,
+        "optimization_cost": 143.0,
+        "quality_score": 94.7,
+        "feasible": true,
+        "timeline": [
+          {
+            "item_type": "transportation",
+            "name": "蜂窝酒店(西湖南星桥地铁站店) → 桐洲岛",
+            "start_time": "09:00",
+            "end_time": "11:23",
+            "duration_minutes": 143,
+            "day_index": 2,
+            "source_index": 0,
+            "transportation_time_source": "amap"
+          },
+          {
+            "item_type": "break",
+            "name": "路线机动缓冲",
+            "start_time": "11:23",
+            "end_time": "11:33",
+            "duration_minutes": 10,
+            "day_index": 2,
+            "source_index": 0,
+            "transportation_time_source": null
+          },
+          {
+            "item_type": "meal",
+            "name": "桐洲岛周边午餐",
+            "start_time": "11:33",
+            "end_time": "12:33",
+            "duration_minutes": 60,
+            "day_index": 2,
+            "source_index": null,
+            "transportation_time_source": null
+          },
+          {
+            "item_type": "attraction",
+            "name": "桐洲岛",
+            "start_time": "12:33",
+            "end_time": "15:03",
+            "duration_minutes": 150,
+            "day_index": 2,
+            "source_index": 0,
+            "transportation_time_source": null
+          }
+        ]
+      }
+    ]
+  },
+  "schedule_quality_plan_fingerprint": "69ee9746b066411ecf31319bbcddaf5589b84f24fd25145621d7d898df46a982",
+  "schedule_optimization_count": 1,
+  "schedule_optimization_status": "completed",
+  "schedule_optimization_candidate": null,
+  "schedule_optimization_baseline_plan": null,
+  "schedule_optimization_baseline_routes": null,
+  "schedule_optimization_baseline_route_quality": null,
+  "schedule_optimization_baseline_quality": null,
+  "schedule_optimization_baseline_fingerprint": null,
+  "schedule_optimization_history": [
+    {
+      "attempt": 1,
+      "status": "accepted",
+      "reason": "Candidate accepted after real schedule cost improved by 99.82%",
+      "baseline_fingerprint": "a6e5e0441eb31c9dc2a4ee7995ff048cca4e0d08d4af8f4794c53d2da5faa5b1",
+      "candidate_fingerprint": "69ee9746b066411ecf31319bbcddaf5589b84f24fd25145621d7d898df46a982",
+      "strategy": "remove_attractions_from_overloaded_days",
+      "source_day_index": 1,
+      "target_day_index": null,
+      "moved_attraction_name": "千岛湖风景区中心湖区",
+      "removed_attraction_names": [
+        "千岛湖风景区中心湖区",
+        "千岛湖天屿景区",
+        "芦茨湾",
+        "杭州西湖风景名胜区-湖滨公园"
+      ],
+      "approximate_improvement_percent": 97.57,
+      "actual_improvement_percent": 99.82,
+      "baseline_cost": 118187.0,
+      "candidate_cost": 217.0,
+      "recorded_at": "2026-08-10T05:59:48.124071Z"
+    }
+  ],
+  "constraint_report": {
+    "plan_fingerprint": "b340d25cb33072c0ac8977ef32c9205df9de872984e4c0451397fe83d71371b8",
+    "error_count": 0,
+    "warning_count": 0,
+    "repairable_issue_count": 0,
+    "optimization_cost": 0.0,
+    "quality_score": 100.0,
+    "feasible": true,
+    "optimization_recommended": false,
+    "days": [
+      {
+        "day_index": 0,
+        "date": "2026-08-10",
+        "error_count": 0,
+        "warning_count": 0,
+        "optimization_cost": 0.0,
+        "feasible": true,
+        "issues": []
+      },
+      {
+        "day_index": 1,
+        "date": "2026-08-11",
+        "error_count": 0,
+        "warning_count": 0,
+        "optimization_cost": 0.0,
+        "feasible": true,
+        "issues": []
+      },
+      {
+        "day_index": 2,
+        "date": "2026-08-12",
+        "error_count": 0,
+        "warning_count": 0,
+        "optimization_cost": 0.0,
+        "feasible": true,
+        "issues": []
+      }
+    ],
+    "issues": []
+  },
+  "constraint_plan_fingerprint": "b340d25cb33072c0ac8977ef32c9205df9de872984e4c0451397fe83d71371b8",
+  "constraint_optimization_count": 0,
+  "constraint_optimization_status": "skipped",
+  "constraint_optimization_candidate": null,
+  "constraint_optimization_baseline_plan": null,
+  "constraint_optimization_baseline_routes": null,
+  "constraint_optimization_baseline_route_quality": null,
+  "constraint_optimization_baseline_schedule": null,
+  "constraint_optimization_baseline_report": null,
+  "constraint_optimization_baseline_fingerprint": null,
+  "constraint_optimization_history": [],
+  "content_refill_count": 0,
+  "content_refill_status": "not_started",
+  "content_refill_candidate": null,
+  "content_refill_baseline_plan": null,
+  "content_refill_baseline_routes": null,
+  "content_refill_baseline_route_quality": null,
+  "content_refill_baseline_schedule": null,
+  "content_refill_baseline_constraint_report": null,
+  "content_refill_baseline_route_fingerprint": null,
+  "content_refill_baseline_constraint_fingerprint": null,
+  "content_refill_excluded_identities": [],
+  "content_refill_history": [],
+  "plan_consistency_fingerprint": "f851570e12ddbead9fe2e7eaddcc09aa360ab3c8bbd7b3cdada4fb3846aa0b69",
+  "plan_consistency_rebuild_count": 1,
+  "last_action_result": {
+    "tool_name": "estimate_routes",
+    "success": true,
+    "data": {
+      "provider": "amap",
+      "plan_fingerprint": "69ee9746b066411ecf31319bbcddaf5589b84f24fd25145621d7d898df46a982",
+      "requested_legs": 3,
+      "evaluated_legs": 3,
+      "truncated_legs": 0,
+      "cache_hits": 2,
+      "cache_misses": 1,
+      "failed_legs": 0,
+      "routes": [
+        {
+          "provider": "amap",
+          "day_index": 0,
+          "leg_index": 0,
+          "leg_type": "hotel_departure",
+          "date": "2026-08-10",
+          "origin_name": "蜂窝酒店(西湖南星桥地铁站店)",
+          "destination_name": "湘湖国家旅游度假区",
+          "mode": "transit",
+          "available": true,
+          "distance_meters": 13209,
+          "duration_seconds": 2143,
+          "error_code": null,
+          "error_message": null,
+          "cache_hit": false
+        },
+        {
+          "provider": "amap",
+          "day_index": 0,
+          "leg_index": 0,
+          "leg_type": "hotel_return",
+          "date": "2026-08-10",
+          "origin_name": "湘湖国家旅游度假区",
+          "destination_name": "蜂窝酒店(西湖南星桥地铁站店)",
+          "mode": "transit",
+          "available": true,
+          "distance_meters": 13254,
+          "duration_seconds": 2263,
+          "error_code": null,
+          "error_message": null,
+          "cache_hit": true
+        },
+        {
+          "provider": "amap",
+          "day_index": 2,
+          "leg_index": 0,
+          "leg_type": "hotel_departure",
+          "date": "2026-08-12",
+          "origin_name": "蜂窝酒店(西湖南星桥地铁站店)",
+          "destination_name": "桐洲岛",
+          "mode": "transit",
+          "available": true,
+          "distance_meters": 63808,
+          "duration_seconds": 8544,
+          "error_code": null,
+          "error_message": null,
+          "cache_hit": true
+        }
+      ]
+    },
+    "error": null,
+    "error_type": null,
+    "retryable": false,
+    "duration_ms": 477,
+    "retry_after_ms": 0,
+    "circuit_state": "closed",
+    "provider_code": null,
+    "provider_message": null
+  },
+  "last_validation_result": {
+    "valid": true,
+    "repairable": false,
+    "error_count": 0,
+    "warning_count": 1,
+    "issues": [
+      {
+        "code": "day.no_attractions",
+        "severity": "warning",
+        "path": "days[1].attractions",
+        "message": "当天没有安排景点",
+        "repair_hint": "如候选景点数据可用，建议安排 1-3 个景点",
+        "repairable": true,
+        "expected": null,
+        "actual": 0
+      }
+    ],
+    "checked_at": "2026-08-10T05:59:48.500072Z"
+  },
+  "validation_history": [
+    {
+      "valid": true,
+      "repairable": false,
+      "error_count": 0,
+      "warning_count": 1,
+      "issues": [
+        {
+          "code": "day.no_attractions",
+          "severity": "warning",
+          "path": "days[1].attractions",
+          "message": "当天没有安排景点",
+          "repair_hint": "如候选景点数据可用，建议安排 1-3 个景点",
+          "repairable": true,
+          "expected": null,
+          "actual": 0
+        }
+      ],
+      "checked_at": "2026-08-10T05:59:48.500072Z"
+    }
+  ],
+  "plan_normalization_history": [],
+  "attempts_by_action": {
+    "search_attractions": 1,
+    "get_weather": 1,
+    "search_hotels": 1,
+    "generate_plan": 1,
+    "estimate_routes": 2,
+    "optimize_schedule": 2,
+    "rebuild_plan_content": 1,
+    "evaluate_constraints": 1,
+    "validate_plan": 1,
+    "finish": 1
+  },
+  "action_history": [
+    {
+      "step": 1,
+      "action": "search_attractions",
+      "reason": "景点数据尚未获取",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": "search_attractions",
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 478,
+      "retry_delay_ms": 0,
+      "circuit_state": "closed",
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:58:57.250966Z"
+    },
+    {
+      "step": 2,
+      "action": "get_weather",
+      "reason": "天气数据尚未获取",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": "get_weather",
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 191,
+      "retry_delay_ms": 0,
+      "circuit_state": "closed",
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:58:57.570967Z"
+    },
+    {
+      "step": 3,
+      "action": "search_hotels",
+      "reason": "酒店数据尚未获取",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": "search_hotels",
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 338,
+      "retry_delay_ms": 0,
+      "circuit_state": "closed",
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:58:58.051166Z"
+    },
+    {
+      "step": 4,
+      "action": "generate_plan",
+      "reason": "基础数据已就绪，需要生成行程",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": "generate_plan",
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 43778,
+      "retry_delay_ms": 0,
+      "circuit_state": "closed",
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:59:41.958434Z"
+    },
+    {
+      "step": 5,
+      "action": "estimate_routes",
+      "reason": "行程已生成，需要查询相邻景点的真实路线",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": "estimate_routes",
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 5134,
+      "retry_delay_ms": 0,
+      "circuit_state": "closed",
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:59:47.230082Z"
+    },
+    {
+      "step": 6,
+      "action": "optimize_schedule",
+      "reason": "日程存在超时，需要执行有界确定性跨日优化",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": null,
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 0,
+      "retry_delay_ms": 0,
+      "circuit_state": null,
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:59:47.364083Z"
+    },
+    {
+      "step": 7,
+      "action": "estimate_routes",
+      "reason": "行程已生成，需要查询相邻景点的真实路线",
+      "attempt": 2,
+      "success": true,
+      "error": null,
+      "tool_name": "estimate_routes",
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 477,
+      "retry_delay_ms": 0,
+      "circuit_state": "closed",
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:59:47.967984Z"
+    },
+    {
+      "step": 8,
+      "action": "optimize_schedule",
+      "reason": "日程存在超时，需要执行有界确定性跨日优化",
+      "attempt": 2,
+      "success": true,
+      "error": null,
+      "tool_name": null,
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 0,
+      "retry_delay_ms": 0,
+      "circuit_state": null,
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:59:48.124071Z"
+    },
+    {
+      "step": 9,
+      "action": "rebuild_plan_content",
+      "reason": "景点与路线已经稳定，需要重建描述、餐饮、交通和预算",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": null,
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 0,
+      "retry_delay_ms": 0,
+      "circuit_state": null,
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:59:48.250072Z"
+    },
+    {
+      "step": 10,
+      "action": "evaluate_constraints",
+      "reason": "时间轴已就绪，需要评估行程可执行性约束",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": null,
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 0,
+      "retry_delay_ms": 0,
+      "circuit_state": null,
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:59:48.375072Z"
+    },
+    {
+      "step": 11,
+      "action": "validate_plan",
+      "reason": "行程已生成，需要执行确定性语义校验",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": null,
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 0,
+      "retry_delay_ms": 0,
+      "circuit_state": null,
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 1,
+      "recorded_at": "2026-08-10T05:59:48.500072Z"
+    },
+    {
+      "step": 12,
+      "action": "finish",
+      "reason": "行程已通过校验，结束执行",
+      "attempt": 1,
+      "success": true,
+      "error": null,
+      "tool_name": null,
+      "error_type": null,
+      "retryable": false,
+      "duration_ms": 0,
+      "retry_delay_ms": 0,
+      "circuit_state": null,
+      "provider_code": null,
+      "provider_message": null,
+      "validation_error_count": 0,
+      "validation_warning_count": 0,
+      "recorded_at": "2026-08-10T05:59:48.683070Z"
+    }
+  ],
+  "errors": []
+}

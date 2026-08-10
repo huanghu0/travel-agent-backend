@@ -44,9 +44,9 @@ class AmapTools(AmapClient):
             ) from exc
 
 
-# Tool-call parser used only by the retired prompt-driven map agents.
+# 该工具调用解析器只供已经退出主流程的旧版提示词地图智能体兼容使用。
 def parse_tool_call(response: str):
-    """Parse Anthropic native tool calls or the legacy text instruction."""
+    """解析 Anthropic 原生工具调用或旧版文本工具指令。"""
     import json
     import re
 

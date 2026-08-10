@@ -146,7 +146,7 @@ class RetryDecision:
 
 
 class ExecutionPolicy:
-    """Own the single-call execution boundary and all retry decisions."""
+    """统一管理单次工具调用边界、预算检查、熔断状态和重试决策。"""
 
     def __init__(
         self,

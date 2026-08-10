@@ -13,6 +13,7 @@ from app.providers.amap.models import (
     AttractionSearchResult,
     GeoPoint,
     HotelSearchResult,
+    NearbyAttractionSearchResult,
     RouteEstimate,
     RouteEstimateResult,
     RouteLegRequest,
@@ -124,6 +125,36 @@ class AmapClient:
         )
 
     @classmethod
+    def around_search(
+        cls,
+        *,
+        location: GeoPoint,
+        city: str,
+        keywords: str,
+        radius_meters: int,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        """围绕一个坐标搜索 POI，并要求高德按距离排序。"""
+
+        return cls._get_json(
+            "https://restapi.amap.com/v3/place/around",
+            {
+                "key": settings.AMAP_API_KEY,
+                "location": cls._coordinate(location),
+                "keywords": keywords,
+                "city": city,
+                "citylimit": "true",
+                "radius": max(100, min(50000, radius_meters)),
+                "sortrule": "distance",
+                "offset": max(1, min(25, page_size)),
+                "page": max(1, page),
+                "extensions": "all",
+                "output": "json",
+            },
+        )
+
+    @classmethod
     def get_weather(cls, city: str) -> dict[str, Any]:
         return cls._get_json(
             "https://restapi.amap.com/v3/weather/weatherInfo",
@@ -137,13 +168,13 @@ class AmapClient:
 
     @staticmethod
     def _coordinate(point: GeoPoint) -> str:
-        """Amap accepts longitude first and at most six decimal places."""
+        """高德坐标参数经度在前，并限制为最多六位小数。"""
 
         return f"{point.longitude:.6f},{point.latitude:.6f}"
 
     @classmethod
     def district_search(cls, city: str) -> dict[str, Any]:
-        """Resolve a city name to the citycode required by the transit API."""
+        """把城市名称解析成公交路线接口要求的 citycode。"""
 
         return cls._get_json(
             "https://restapi.amap.com/v3/config/district",
@@ -168,7 +199,7 @@ class AmapClient:
         origin_city_code: str = "",
         destination_city_code: str = "",
     ) -> dict[str, Any]:
-        """Call Amap Route Planning 2.0 for one route leg."""
+        """调用高德路线规划 2.0 查询一条路线分段。"""
 
         endpoints = {
             "driving": "https://restapi.amap.com/v5/direction/driving",
@@ -208,7 +239,7 @@ class AmapClient:
                     "AlternativeRoute": 1,
                 }
             )
-            # Amap requires transit POI IDs to be supplied as a pair.
+            # 高德公交路线要求起点和终点 POI ID 成对提供。
             if origin_poi_id and destination_poi_id:
                 params["originpoi"] = origin_poi_id
                 params["destinationpoi"] = destination_poi_id
@@ -242,6 +273,39 @@ class AmapProviderClient:
             limit=settings.AMAP_MAX_ATTRACTION_CANDIDATES,
         )
 
+    def search_nearby_attractions(
+        self,
+        *,
+        city: str,
+        keywords: str,
+        center: GeoPoint,
+        radius_meters: int,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> NearbyAttractionSearchResult:
+        raw = self.raw_client.around_search(
+            location=center,
+            city=city,
+            keywords=keywords,
+            radius_meters=radius_meters,
+            page=page,
+            page_size=page_size,
+        )
+        payload = validate_amap_response(raw)
+        normalized = normalize_attractions(
+            payload,
+            city=city,
+            keywords=keywords,
+            limit=page_size,
+        )
+        return NearbyAttractionSearchResult(
+            **normalized.model_dump(),
+            center=center,
+            radius_meters=radius_meters,
+            page=page,
+            page_size=page_size,
+        )
+
     def search_hotels(
         self,
         *,
@@ -268,7 +332,7 @@ class AmapProviderClient:
 
 
     def resolve_city_code(self, city: str) -> str:
-        """Resolve and cache the citycode needed by Route Planning 2.0 transit."""
+        """解析并缓存高德路线规划 2.0 公交模式所需的 citycode。"""
 
         cache_key = city.strip().lower()
         cached = self._city_code_cache.get(cache_key)
@@ -309,7 +373,7 @@ class AmapProviderClient:
         estimate: RouteEstimate,
         leg: RouteLegRequest,
     ) -> RouteEstimate:
-        """Reuse cached metrics while restoring metadata from the current plan."""
+        """复用缓存中的路线指标，同时恢复当前行程对应的分段元数据。"""
 
         return estimate.model_copy(
             update={
@@ -334,7 +398,7 @@ class AmapProviderClient:
         try:
             cached = self.route_cache.get(cache_key)
         except Exception:
-            # Route caching is an optimization. A cache outage must not block planning.
+            # 路线缓存只是性能优化，缓存故障不能阻断旅行规划主流程。
             logger.warning("Route cache read failed", exc_info=True)
             return None
         if cached is None:
@@ -358,11 +422,11 @@ class AmapProviderClient:
                 ttl_seconds=ttl_seconds,
             )
         except Exception:
-            # Do not turn a successful provider call into a failed tool action.
+            # 缓存写入失败不能把已经成功的高德请求变成工具失败。
             logger.warning("Route cache write failed", exc_info=True)
 
     def _prepare_leg(self, city: str, leg: RouteLegRequest) -> RouteLegRequest:
-        """Fill transit city codes before building the cache key and HTTP request."""
+        """生成缓存键和 HTTP 请求前，补齐公交路线所需的城市编码。"""
 
         if leg.mode != "transit":
             return leg
@@ -390,7 +454,7 @@ class AmapProviderClient:
         legs: list[RouteLegRequest],
         limit: int | None = None,
     ) -> RouteEstimateResult:
-        """Query each route independently so one bad leg does not discard the batch."""
+        """逐段独立查询路线，避免单段失败导致整批结果全部丢失。"""
 
         maximum = (
             max(0, settings.AMAP_MAX_ROUTE_LEGS)
@@ -427,8 +491,8 @@ class AmapProviderClient:
                 payload = validate_amap_response(raw)
                 estimate = normalize_route(payload, leg=leg, mode=leg.mode)
             except AmapProviderError as exc:
-                # Authorization and throttling affect the whole provider request. Let the
-                # execution policy fail fast or retry; cached successful legs avoid repeats.
+                # 鉴权失败和限流会影响整个供应商请求，应交给统一执行策略
+                # 快速失败或重试；已经缓存的成功分段不会被重复请求。
                 if exc.kind in {AmapErrorKind.AUTHORIZATION, AmapErrorKind.RATE_LIMIT}:
                     raise
                 estimate = self._unavailable_route(original_leg, exc)

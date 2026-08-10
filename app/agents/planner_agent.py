@@ -1,3 +1,5 @@
+"""调用 LLM 生成或修复 TripPlan，并执行 JSON 提取与结构校验。"""
+
 import json
 
 from pydantic import ValidationError

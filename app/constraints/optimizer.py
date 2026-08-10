@@ -1,4 +1,4 @@
-"""Bounded deterministic optimizer for execution-constraint conflicts."""
+"""用于解决行程可执行性冲突的有界确定性优化器。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from app.scheduling import ScheduleTimelineEvaluator
 
 
 class DeterministicConstraintOptimizer:
-    """Prefer reorder/move candidates, then shed an irreparable attraction."""
+    """优先尝试重排或跨日移动，最后才移除无法修复的景点。"""
 
     def __init__(
         self,
@@ -67,7 +67,7 @@ class DeterministicConstraintOptimizer:
                 source_index = len(plan.days[source_position].attractions) - 1
             moved_name = plan.days[source_position].attractions[source_index].name
 
-            # First try same-day deterministic reordering.
+            # 第一步：尝试同一天内的确定性景点重排。
             for insertion_index in range(len(plan.days[source_position].attractions)):
                 if insertion_index == source_index:
                     continue
@@ -89,7 +89,7 @@ class DeterministicConstraintOptimizer:
             if len(candidates) >= self.max_candidates:
                 break
 
-            # Then try cross-day movement, preferring later days.
+            # 第二步：尝试跨日移动，并优先考虑后续日期。
             target_positions = list(range(source_position + 1, len(plan.days))) + list(
                 range(0, source_position)
             )
@@ -145,9 +145,9 @@ class DeterministicConstraintOptimizer:
 
         removed_names: list[str] = []
         if best is None:
-            # Reordering and cross-day movement can both fail when a single remote
-            # attraction makes the lunch window impossible. Only then consider
-            # removing one attraction from the affected day.
+            # 如果某个过远景点导致午餐窗口无法满足，重排和跨日移动都可能失败；
+            # 只有在前两种策略均不可行时，
+            # 才考虑从受影响日期移除一个景点。
             removal_best: tuple[float, int, int, TripPlan, str] | None = None
             removal_considered = 0
             visited_days: set[int] = set()

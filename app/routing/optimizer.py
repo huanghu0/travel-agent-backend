@@ -1,4 +1,4 @@
-"""Bounded, deterministic attraction-order optimizer using geographic distance."""
+"""使用地理距离进行有界、确定性的景点顺序优化。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from app.schemas.trip_schema import Attraction, TripPlan
 
 
 class RouteOptimizationCandidate(BaseModel):
-    """One best bounded candidate; real route estimates must validate it later."""
+    """当前最优的有界候选，后续仍必须通过真实路线结果验证。"""
 
     plan: TripPlan
     changed_day_index: int = Field(ge=0)
@@ -75,7 +75,7 @@ def _nearest_neighbor(attractions: list[Attraction]) -> list[Attraction]:
 
 
 def _bounded_orders(attractions: list[Attraction]) -> Iterable[tuple[str, list[Attraction]]]:
-    """Yield deterministic strategies while keeping the first stop fixed."""
+    """固定首个景点，并按稳定顺序生成确定性的重排策略。"""
 
     yield "nearest_neighbor", _nearest_neighbor(attractions)
     count = len(attractions)
@@ -95,7 +95,7 @@ def _bounded_orders(attractions: list[Attraction]) -> Iterable[tuple[str, list[A
 
 
 class DeterministicRouteOptimizer:
-    """Choose one approximate improvement without external calls or randomness."""
+    """不调用外部服务、不使用随机性，只选择一个近似成本更低的候选。"""
 
     def __init__(self, max_candidates: int = 6):
         if max_candidates < 1:

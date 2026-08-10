@@ -1,4 +1,4 @@
-"""Deterministic evaluation of real-world trip execution constraints."""
+"""确定性评估行程在真实场景中的可执行性约束。"""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def _timeline_clock(value: str) -> int:
 
 
 def constraint_plan_fingerprint(request: TripRequest, plan: TripPlan) -> str:
-    """Hash all request and plan fields that affect feasibility rules."""
+    """对所有影响可执行性规则的请求和行程字段生成稳定指纹。"""
 
     payload = {
         "request": {
@@ -82,7 +82,7 @@ def constraint_plan_fingerprint(request: TripRequest, plan: TripPlan) -> str:
 
 
 class ConstraintEvaluator:
-    """Evaluate opening hours, meal windows, preferences, and weather risks."""
+    """评估营业时间、用餐窗口、用户偏好以及天气风险。"""
 
     def __init__(
         self,

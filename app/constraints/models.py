@@ -1,4 +1,4 @@
-"""Structured results for deterministic trip execution-constraint evaluation."""
+"""确定性行程可执行性约束评估使用的结构化结果。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ ConstraintOptimizationStatus = Literal[
 
 
 class ConstraintIssue(BaseModel):
-    """One deterministic feasibility issue tied to a plan location or day."""
+    """一个与指定地点或行程日绑定的确定性可执行性问题。"""
 
     code: str
     severity: ConstraintSeverity
@@ -36,7 +36,7 @@ class ConstraintIssue(BaseModel):
 
 
 class DayConstraintReport(BaseModel):
-    """Constraint summary for one travel day."""
+    """单个旅行日的可执行性约束汇总。"""
 
     day_index: int = Field(ge=0)
     date: str = ""
@@ -48,7 +48,7 @@ class DayConstraintReport(BaseModel):
 
 
 class TripConstraintReport(BaseModel):
-    """Stable feasibility report for one complete trip plan."""
+    """完整行程对应的稳定可执行性报告。"""
 
     plan_fingerprint: str = Field(min_length=1)
     error_count: int = Field(default=0, ge=0)
@@ -63,7 +63,7 @@ class TripConstraintReport(BaseModel):
 
 
 class ConstraintOptimizationCandidate(BaseModel):
-    """One bounded plan mutation awaiting real-route verification."""
+    """一个等待真实路线复验的有界行程修改候选。"""
 
     plan: TripPlan
     source_day_index: int = Field(ge=0)

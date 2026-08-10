@@ -2,9 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.commute import CommuteConstraintEvaluator
 from app.agent_runtime import AgentAction, AgentState, TripOrchestrator
 from app.constraints import ConstraintEvaluator, DeterministicConstraintOptimizer
 from app.memory import SQLiteAgentStateStore
+from app.plan_content import plan_content_source_fingerprint
 from app.providers.amap.models import RouteEstimate, RouteEstimateResult
 from app.routing import evaluate_route_quality, plan_route_fingerprint
 from app.schemas.trip_schema import TripPlan, TripRequest
@@ -322,9 +324,18 @@ class ConstraintOrchestratorTests(unittest.TestCase):
         state.route_quality_report = evaluate_route_quality(plan, routes)
         state.route_quality_plan_fingerprint = routes.plan_fingerprint
         state.route_optimization_status = "skipped"
+        state.commute_report = CommuteConstraintEvaluator().evaluate(request, plan, routes)
+        state.commute_plan_fingerprint = routes.plan_fingerprint
+        state.commute_optimization_status = "skipped"
         state.schedule_quality_report = evaluator.evaluate(request, plan, routes)
         state.schedule_quality_plan_fingerprint = routes.plan_fingerprint
         state.schedule_optimization_status = "skipped"
+        state.plan_consistency_fingerprint = plan_content_source_fingerprint(
+            request,
+            plan,
+            routes,
+            state.schedule_quality_report,
+        )
         return state
 
     def test_local_evaluation_and_candidate_do_not_consume_call_budgets(self):

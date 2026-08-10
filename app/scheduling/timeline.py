@@ -1,4 +1,4 @@
-"""Deterministic construction and scoring of daily trip timelines."""
+"""确定性构建并评分每日完整行程时间轴。"""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _parse_clock(value: str) -> int:
 
 
 def _format_clock(total_minutes: int) -> str:
-    """Keep overtime visible instead of wrapping it into the next calendar day."""
+    """保留超时分钟数，不把超时错误地折算到下一自然日。"""
 
     hours, minutes = divmod(max(0, total_minutes), 60)
     return f"{hours:02d}:{minutes:02d}"
@@ -74,7 +74,7 @@ def _route_lookup(
 
 
 class ScheduleTimelineEvaluator:
-    """Build timelines from plan durations plus real or conservative route times."""
+    """使用景点停留时长以及真实或保守路线耗时构建时间轴。"""
 
     def __init__(
         self,
@@ -111,7 +111,7 @@ class ScheduleTimelineEvaluator:
         plan: TripPlan,
         route_estimates: RouteEstimateResult | dict | None = None,
     ) -> ScheduleQualityReport:
-        """Evaluate every day with stable ordering and no external calls."""
+        """不调用外部服务，按稳定顺序评估每一个行程日。"""
 
         routes = _route_lookup(route_estimates)
         day_reports = [
@@ -190,8 +190,8 @@ class ScheduleTimelineEvaluator:
 
         lunch_name = self._lunch_name(day)
 
-        # Start each day from its hotel. On checkout days the nearest previous
-        # hotel is reused, which keeps the first attraction's travel time visible.
+        # 每天从对应酒店出发；退房日如果没有新酒店，
+        # 则沿用最近一次酒店，确保前往首个景点的通勤耗时仍然可见。
         if day.attractions and start_hotel is not None:
             departure_route = routes.get((day_index, "hotel_departure", 0))
             route_minutes, source = self._transport_minutes(
@@ -220,8 +220,8 @@ class ScheduleTimelineEvaluator:
                 break_minutes += self.route_buffer_minutes
 
         for attraction_index, attraction in enumerate(day.attractions):
-            # A route may cross noon. Insert lunch before the next attraction so
-            # the timeline never postpones the meal until that attraction ends.
+            # 路线可能跨过中午，因此在下一个景点前插入午餐，
+            # 避免把午餐错误推迟到该景点游览结束之后。
             if (
                 not lunch_added
                 and self.lunch_duration_minutes > 0
@@ -250,8 +250,8 @@ class ScheduleTimelineEvaluator:
                 )
                 break_minutes += self.attraction_buffer_minutes
 
-            # Lunch is inserted once the active timeline reaches noon, but only
-            # when the day actually spans the lunch period.
+            # 当前时间轴到达中午后插入一次午餐，但仅在
+            # 当天活动确实覆盖午餐时段时才执行。
             if (
                 not lunch_added
                 and self.lunch_duration_minutes > 0
@@ -290,8 +290,8 @@ class ScheduleTimelineEvaluator:
                 )
                 break_minutes += self.route_buffer_minutes
 
-        # Returning to the current day's hotel is part of the executable
-        # schedule. The final checkout day has no return leg when hotel is absent.
+        # 返回当天酒店属于完整可执行行程的一部分；
+        # 最终退房日如果没有酒店，则不生成返回酒店路线。
         if day.attractions and return_hotel is not None:
             return_route = routes.get((day_index, "hotel_return", 0))
             route_minutes, source = self._transport_minutes(

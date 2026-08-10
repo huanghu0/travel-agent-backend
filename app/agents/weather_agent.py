@@ -1,3 +1,5 @@
+"""旧版模型驱动天气 Agent，保留用于兼容；主流程已直接调用 ToolRegistry。"""
+
 from .base import BaseAgent
 from ..prompts.agent_prompts import WEATHER_AGENT_PROMPT
 from ..tools.amap_tools import AmapTools, parse_tool_call

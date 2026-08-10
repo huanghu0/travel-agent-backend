@@ -1,4 +1,4 @@
-"""Bounded deterministic cross-day schedule optimization."""
+"""有界、确定性的跨日行程时间轴优化。"""
 
 from __future__ import annotations
 
@@ -8,14 +8,11 @@ from app.scheduling.timeline import ScheduleTimelineEvaluator
 
 
 class DeterministicScheduleOptimizer:
-    """Move attractions first, then deterministically shed impossible workload.
+    """优先跨日移动景点，确实无法容纳时再确定性削减负载。
 
-    Cross-day movement preserves every attraction and therefore remains the preferred
-    strategy. If every day is already overloaded and no move lowers the approximate
-    schedule cost, the optimizer removes one attraction at a time from the worst day
-    until the approximate timeline is feasible or the bounded candidate budget is
-    exhausted. The orchestrator always re-fetches real routes before accepting either
-    strategy.
+    跨日移动能够保留全部景点，因此优先级最高；如果所有日期都已经超载，
+    且移动无法降低近似成本，则从最严重超时日逐个移除景点，直到时间轴可行
+    或耗尽候选预算。无论采用哪种策略，编排器都会在接受前重新查询真实路线。
     """
 
     def __init__(
@@ -39,8 +36,8 @@ class DeterministicScheduleOptimizer:
         if not overloaded:
             return None
 
-        # Score all local candidates with one stable Haversine model. Real route
-        # estimates are deliberately fetched by the orchestrator verification pass.
+        # 使用稳定的 Haversine 距离模型为本地候选评分；真实路线数据统一由
+        # 编排器在后续验证阶段查询，避免优化器内部产生隐藏的网络调用。
         approximate_baseline = self.evaluator.evaluate(request, plan, None)
         baseline_cost = approximate_baseline.optimization_cost
 
@@ -53,9 +50,9 @@ class DeterministicScheduleOptimizer:
         if move_candidate is not None:
             return move_candidate
 
-        # When all days are overloaded, moving work merely transfers the conflict.
-        # Shed the smallest deterministic set of attractions needed to fit the daily
-        # windows. This is safer than asking the LLM to repeatedly rewrite the plan.
+        # 当所有日期都超载时，跨日移动只会转移冲突，因此直接停止本轮优化。
+        # 只移除让日程恢复可执行所必需的最小确定性景点集合，
+        # 比反复要求 LLM 重写整个行程更加稳定和安全。
         return self._build_overload_reduction(
             request,
             plan,
@@ -154,8 +151,8 @@ class DeterministicScheduleOptimizer:
             if not source_day.attractions:
                 break
 
-            # Evaluate removing each attraction from the worst day. Lowest total
-            # cost wins; the original index breaks ties to keep the result stable.
+            # 逐个评估从最严重超时日移除景点后的成本，选择总成本最低的方案；
+            # 成本相同时使用原始索引打破平局，保证结果稳定可复现。
             best: tuple[float, int, TripPlan, ScheduleQualityReport, str] | None = None
             for attraction_index, attraction in enumerate(source_day.attractions):
                 if considered >= self.max_candidates:

@@ -1,4 +1,4 @@
-﻿"""SQLite-backed cache for normalized route estimates."""
+﻿"""使用 SQLite 持久化标准化高德路线结果的缓存。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from app.providers.amap.models import RouteEstimate
 
 
 class SQLiteRouteCache:
-    """Persist per-leg route estimates independently from AgentState snapshots."""
+    """按路线分段独立持久化，不与完整 AgentState 检查点耦合。"""
 
     def __init__(self, database_path: str | Path):
         self.database_path = Path(database_path).expanduser()

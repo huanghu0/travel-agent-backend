@@ -1,4 +1,4 @@
-﻿"""Cache-key contract for normalized Amap route estimates."""
+﻿"""标准化高德路线结果的缓存键契约。"""
 
 from __future__ import annotations
 
@@ -10,10 +10,10 @@ from app.providers.amap.models import RouteEstimate, RouteLegRequest
 
 
 class RouteCache(Protocol):
-    """Minimal cache interface injected into the Amap provider."""
+    """注入高德 Provider 的最小路线缓存接口。"""
 
     def get(self, cache_key: str) -> RouteEstimate | None:
-        """Return a non-expired estimate, or None on a cache miss."""
+        """返回未过期路线结果；缓存未命中时返回 None。"""
 
     def set(
         self,
@@ -22,11 +22,11 @@ class RouteCache(Protocol):
         *,
         ttl_seconds: int,
     ) -> None:
-        """Persist one estimate for the requested TTL."""
+        """按指定 TTL 持久化一条路线结果。"""
 
 
 def route_leg_cache_key(leg: RouteLegRequest) -> str:
-    """Build a stable key from fields that affect the provider route result."""
+    """使用会影响供应商路线结果的字段构建稳定缓存键。"""
 
     payload = {
         "version": 1,

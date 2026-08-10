@@ -21,11 +21,11 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 class Settings:
-    # LLM protocol: responses (OpenAI Responses API) or anthropic (Messages API)
+    # LLM 协议：responses（OpenAI Responses API）或 anthropic（Messages API）
     LLM_PROTOCOL: str = (_env("LLM_PROTOCOL", "responses") or "responses").lower()
     LLM_TIMEOUT: int = int(_env("LLM_TIMEOUT", "60") or "60")
 
-    # OpenAI Responses API configuration. Legacy LLM_* variables remain fallbacks.
+    # OpenAI Responses API 配置；旧版 LLM_* 变量仍作为兼容回退。
     GPT_LLM_MODEL_ID: str = _env(
         "GPT_LLM_MODEL_ID", _env("LLM_MODEL_ID", "gpt-4o")
     ) or "gpt-4o"
@@ -37,7 +37,7 @@ class Settings:
         _env("LLM_BASE_URL", "https://api.openai.com/v1"),
     ) or "https://api.openai.com/v1"
 
-    # Anthropic Messages API configuration.
+    # Anthropic Messages API 配置。
     CLAUDE_LLM_MODEL_ID: str = _env(
         "CLAUDE_LLM_MODEL_ID", "claude-opus-4-8"
     ) or "claude-opus-4-8"
@@ -51,7 +51,7 @@ class Settings:
         _env("CLAUDE_LLM_MAX_TOKENS", "16384") or "16384"
     )
 
-    # Persistent AgentState checkpoints and bounded deterministic loop.
+    # AgentState 持久化检查点与有界确定性执行循环。
     AGENT_MEMORY_DB_PATH: str = _env(
         "AGENT_MEMORY_DB_PATH", "data/agent_memory.db"
     ) or "data/agent_memory.db"
@@ -117,6 +117,50 @@ class Settings:
         _env("CONSTRAINT_DAILY_ATTRACTION_SOFT_LIMIT", "5") or "5"
     )
 
+    # 确定性最低内容保障，以及高德附近候选景点回填。
+    AGENT_MIN_TOTAL_ATTRACTIONS: int = int(
+        _env("AGENT_MIN_TOTAL_ATTRACTIONS", "2") or "2"
+    )
+    AGENT_MAX_COMMUTE_REPLACEMENT_ATTEMPTS: int = int(
+        _env("AGENT_MAX_COMMUTE_REPLACEMENT_ATTEMPTS", "2") or "2"
+    )
+    COMMUTE_REPLACEMENT_MAX_CANDIDATES: int = int(
+        _env("COMMUTE_REPLACEMENT_MAX_CANDIDATES", "24") or "24"
+    )
+    AGENT_MAX_COMMUTE_SUPPLEMENT_SEARCHES: int = int(
+        _env("AGENT_MAX_COMMUTE_SUPPLEMENT_SEARCHES", "2") or "2"
+    )
+    COMMUTE_SUPPLEMENT_INITIAL_RADIUS_METERS: int = int(
+        _env("COMMUTE_SUPPLEMENT_INITIAL_RADIUS_METERS", "5000") or "5000"
+    )
+    COMMUTE_SUPPLEMENT_MAX_RADIUS_METERS: int = int(
+        _env("COMMUTE_SUPPLEMENT_MAX_RADIUS_METERS", "20000") or "20000"
+    )
+    COMMUTE_SUPPLEMENT_PAGE_SIZE: int = int(
+        _env("COMMUTE_SUPPLEMENT_PAGE_SIZE", "20") or "20"
+    )
+    COMMUTE_SUPPLEMENT_POOL_MAX_CANDIDATES: int = int(
+        _env("COMMUTE_SUPPLEMENT_POOL_MAX_CANDIDATES", "48") or "48"
+    )
+    COMMUTE_MAX_WALKING_MINUTES: int = int(
+        _env("COMMUTE_MAX_WALKING_MINUTES", "45") or "45"
+    )
+    COMMUTE_MAX_TRANSIT_MINUTES: int = int(
+        _env("COMMUTE_MAX_TRANSIT_MINUTES", "90") or "90"
+    )
+    COMMUTE_MAX_DRIVING_MINUTES: int = int(
+        _env("COMMUTE_MAX_DRIVING_MINUTES", "120") or "120"
+    )
+    AGENT_MAX_CONTENT_REFILL_ATTEMPTS: int = int(
+        _env("AGENT_MAX_CONTENT_REFILL_ATTEMPTS", "2") or "2"
+    )
+    CONTENT_REFILL_MAX_CANDIDATES: int = int(
+        _env("CONTENT_REFILL_MAX_CANDIDATES", "24") or "24"
+    )
+    CONTENT_REFILL_DEFAULT_VISIT_DURATION_MINUTES: int = int(
+        _env("CONTENT_REFILL_DEFAULT_VISIT_DURATION_MINUTES", "120") or "120"
+    )
+
     AGENT_MAX_DURATION_SECONDS: float = float(
         _env("AGENT_MAX_DURATION_SECONDS", "180") or "180"
     )
@@ -142,15 +186,14 @@ class Settings:
         _env("AGENT_CIRCUIT_RECOVERY_TIMEOUT_SECONDS", "30") or "30"
     )
 
-    # Amap HTTP timeouts (connect timeout, read timeout).
+    # 高德 HTTP 超时配置：连接超时与读取超时。
     AMAP_HTTP_CONNECT_TIMEOUT: float = float(
         _env("AMAP_HTTP_CONNECT_TIMEOUT", "3.05") or "3.05"
     )
     AMAP_HTTP_READ_TIMEOUT: float = float(
         _env("AMAP_HTTP_READ_TIMEOUT", "10") or "10"
     )
-    # Standardized provider output limits. Invalid and duplicate rows are removed
-    # before these limits are applied.
+    # Provider 标准化输出数量上限；应用上限前会先移除无效项和重复项。
     AMAP_MAX_ATTRACTION_CANDIDATES: int = int(
         _env("AMAP_MAX_ATTRACTION_CANDIDATES", "8") or "8"
     )
@@ -172,10 +215,10 @@ class Settings:
     AMAP_ROUTE_UNAVAILABLE_CACHE_TTL_SECONDS: int = int(
         _env("AMAP_ROUTE_UNAVAILABLE_CACHE_TTL_SECONDS", "300") or "300"
     )
-    # Amap
+    # 高德地图 Web 服务
     AMAP_API_KEY: Optional[str] = _env("AMAP_API_KEY")
 
-    # Unsplash
+    # Unsplash 图片服务
     UNSPLASH_ACCESS_KEY: Optional[str] = _env("UNSPLASH_ACCESS_KEY")
     UNSPLASH_SECRET_KEY: Optional[str] = _env("UNSPLASH_SECRET_KEY")
 

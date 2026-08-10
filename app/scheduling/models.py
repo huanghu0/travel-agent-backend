@@ -1,4 +1,4 @@
-"""Structured outputs for deterministic trip timeline evaluation and optimization."""
+"""确定性行程时间轴评估与优化使用的结构化输出。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ TransportationTimeSource = Literal["amap", "haversine_fallback"]
 
 
 class TimelineItem(BaseModel):
-    """One contiguous item on a deterministic daily timeline."""
+    """确定性单日时间轴上的一个连续活动项。"""
 
     item_type: TimelineItemType
     name: str
@@ -27,7 +27,7 @@ class TimelineItem(BaseModel):
 
 
 class DayScheduleQuality(BaseModel):
-    """Timeline capacity and quality metrics for one travel day."""
+    """单个旅行日的时间轴容量与质量指标。"""
 
     day_index: int = Field(ge=0)
     date: str = ""
@@ -47,7 +47,7 @@ class DayScheduleQuality(BaseModel):
 
 
 class ScheduleQualityReport(BaseModel):
-    """Stable schedule-quality snapshot tied to one plan fingerprint."""
+    """与指定行程指纹绑定的稳定日程质量快照。"""
 
     plan_fingerprint: str = Field(min_length=1)
     feasible_days: int = Field(default=0, ge=0)
@@ -62,7 +62,7 @@ class ScheduleQualityReport(BaseModel):
 
 
 class ScheduleOptimizationCandidate(BaseModel):
-    """One bounded cross-day candidate awaiting real-route verification."""
+    """一个等待真实路线复验的有界跨日调整候选。"""
 
     plan: TripPlan
     source_day_index: int = Field(ge=0)

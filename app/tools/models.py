@@ -1,4 +1,4 @@
-﻿"""Standard models shared by registered tools and the agent runtime."""
+﻿"""注册工具和智能体运行时共享的标准模型。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class ToolErrorType(str, Enum):
 
 
 class ActionResult(BaseModel):
-    """Normalized result returned by every registered tool execution."""
+    """所有注册工具执行后返回的统一标准结果。"""
 
     tool_name: str
     success: bool
@@ -39,7 +39,7 @@ class ActionResult(BaseModel):
 
 
 class ToolDescriptor(BaseModel):
-    """Safe public metadata that can later be supplied to a coordinator."""
+    """可安全公开并可供未来协调器使用的工具元数据。"""
 
     name: str
     description: str

@@ -1,4 +1,4 @@
-"""Build deterministic route legs for hotels and attractions in a trip plan."""
+"""为行程中的酒店和景点构建确定性的路线分段。"""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ RoutablePlace = Attraction | Hotel
 
 
 def normalize_transportation_mode(value: str | None) -> RouteMode:
-    """Map free-form Chinese or English transport labels to Amap route modes."""
+    """把中英文自由文本交通方式映射成高德路线模式。"""
 
     text = (value or "").strip().lower()
-    # Transit wins for combined descriptions such as walking plus metro.
+    # “步行 + 地铁”等组合描述优先识别为公共交通。
     if any(marker in text for marker in (
         "\u516c\u5171\u4ea4\u901a", "\u516c\u4ea4", "\u5730\u94c1", "\u8f68\u9053", "\u8f7b\u8f68",
         "public", "transit", "metro", "subway", "bus",
@@ -38,7 +38,7 @@ def normalize_transportation_mode(value: str | None) -> RouteMode:
         "\u6b65\u884c", "\u5f92\u6b65", "walking", "walk", "hiking",
     )):
         return "walking"
-    # Urban travel defaults to transit rather than silently assuming car access.
+    # 城市出行默认使用公共交通，不能在用户未说明时假设可以驾车。
     return "transit"
 
 
@@ -57,15 +57,19 @@ def _hotel_fingerprint(hotel: Hotel | None) -> dict[str, Any] | None:
 
 
 def plan_route_fingerprint(request: TripRequest, plan: TripPlan) -> str:
-    """Hash fields that affect hotel and attraction route results."""
+    """对会影响酒店和景点路线结果的字段生成稳定指纹。"""
 
     payload = {
-        "request_transportation": request.transportation,
+        "request_transportation_mode": normalize_transportation_mode(
+            request.transportation
+        ),
         "days": [
             {
                 "date": day.date,
                 "day_index": day.day_index,
-                "transportation": day.transportation,
+                "transportation_mode": normalize_transportation_mode(
+                    day.transportation or request.transportation
+                ),
                 "hotel": _hotel_fingerprint(day.hotel),
                 "attractions": [
                     {
@@ -99,7 +103,7 @@ def _source_candidates(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
     candidates = payload.get("candidates")
     if isinstance(candidates, list):
         return [item for item in candidates if isinstance(item, dict)]
-    # Compatibility with checkpoints created by the retired map agents.
+    # 兼容旧版地图智能体已经保存的历史检查点。
     pois = payload.get("pois")
     return [item for item in pois if isinstance(item, dict)] if isinstance(pois, list) else []
 
@@ -159,11 +163,10 @@ def resolve_day_hotels(
     plan: TripPlan,
     day_position: int,
 ) -> tuple[Hotel | None, Hotel | None]:
-    """Return the deterministic start and return hotel for one plan day.
+    """确定性解析某个行程日的出发酒店和返回酒店。
 
-    The current day's hotel is preferred as the departure point. If it is absent
-    (normally the checkout day), the nearest previous hotel is reused. A return
-    leg is generated only when the current day explicitly contains a hotel.
+    优先使用当天酒店作为出发点；退房日没有酒店时沿用最近的前序酒店。
+    只有当天明确配置酒店时，才生成返回酒店路线。
     """
 
     day = plan.days[day_position]
@@ -178,7 +181,7 @@ def resolve_day_hotels(
 
 
 def expected_route_leg_keys(plan: TripPlan) -> list[RouteLegKey]:
-    """Return the exact semantic route keys expected for the complete plan timeline."""
+    """返回完整地点时间轴所要求的精确语义路线键。"""
 
     keys: list[RouteLegKey] = []
     for day_position, day in enumerate(plan.days):
@@ -200,7 +203,7 @@ def build_route_legs(
     attractions: dict[str, Any] | None = None,
     hotels: dict[str, Any] | None = None,
 ) -> list[RouteLegRequest]:
-    """Build bounded hotel-departure, adjacent-attraction, and hotel-return legs."""
+    """有界构建酒店出发、相邻景点之间以及返回酒店的路线分段。"""
 
     attraction_by_id, attraction_by_name, attraction_city_code = _source_indexes(attractions)
     hotel_by_id, hotel_by_name, hotel_city_code = _source_indexes(hotels)

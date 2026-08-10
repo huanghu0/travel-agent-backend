@@ -15,11 +15,11 @@ from app.memory.models import AgentSessionSummary
 
 
 class SessionNotFoundError(LookupError):
-    """Raised when a persisted session cannot be found."""
+    """找不到指定持久化会话时抛出。"""
 
 
 class SQLiteAgentStateStore:
-    """Persist complete AgentState snapshots with SQLite upserts."""
+    """使用 SQLite UPSERT 保存完整 AgentState 检查点。"""
 
     def __init__(self, database_path: str | Path):
         self.database_path = Path(database_path).expanduser()
@@ -81,7 +81,7 @@ class SQLiteAgentStateStore:
             )
 
     def save_state(self, state: AgentState) -> None:
-        """Create or replace the latest checkpoint for a session."""
+        """创建或覆盖指定会话的最新检查点。"""
 
         # 步骤 1：更新时间和版本，并把完整状态序列化为 JSON。
         state.state_version = CURRENT_AGENT_STATE_VERSION
@@ -125,7 +125,7 @@ class SQLiteAgentStateStore:
             )
 
     def get_state(self, session_id: str) -> AgentState:
-        """Load and validate the latest checkpoint for a session."""
+        """加载并校验指定会话的最新检查点。"""
 
         # 步骤 1：按 session_id 读取最近一次完整 JSON 检查点。
         with self._connection() as connection:
@@ -144,7 +144,7 @@ class SQLiteAgentStateStore:
         limit: int = 50,
         status: AgentStatus | None = None,
     ) -> list[AgentSessionSummary]:
-        """List recent session summaries without loading large state payloads."""
+        """不加载完整大状态对象，只查询最近会话摘要。"""
 
         # 只查询摘要列，不加载可能很大的 state_json；同时限制单次最多 200 条。
         safe_limit = max(1, min(limit, 200))

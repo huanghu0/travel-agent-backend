@@ -15,17 +15,32 @@ from app.agent_runtime.state import (
     ActionRecord,
     AgentAction,
     AgentState,
+    CommuteReplacementRecord,
+    CommuteSupplementRecord,
     ConstraintOptimizationRecord,
+    ContentRefillRecord,
     PlanNormalizationRecord,
     RouteOptimizationRecord,
     ScheduleOptimizationRecord,
+)
+from app.commute import (
+    CommuteCandidatePoolSupplementer,
+    CommuteConstraintEvaluator,
+    RemoteAttractionReplacementOptimizer,
 )
 from app.constraints import (
     ConstraintEvaluator,
     DeterministicConstraintOptimizer,
     constraint_plan_fingerprint,
 )
-from app.providers.amap.models import RouteEstimateResult
+from app.plan_content import (
+    MinimumAttractionRefillOptimizer,
+    TripPlanConsistencyRebuilder,
+    attraction_identity as content_attraction_identity,
+    count_attractions,
+    plan_content_source_fingerprint,
+)
+from app.providers.amap.models import NearbyAttractionSearchResult, RouteEstimateResult
 from app.routing import (
     DeterministicRouteOptimizer,
     build_route_legs,
@@ -46,7 +61,7 @@ from app.validation import TripPlanValidator, remove_duplicate_attractions
 
 
 class AgentStateStore(Protocol):
-    """Minimal checkpoint interface required by the orchestrator."""
+    """编排器保存和恢复状态所需的最小检查点接口。"""
 
     def save_state(self, state: AgentState) -> None: ...
 
@@ -57,11 +72,16 @@ _ACTION_REASONS = {
     AgentAction.SEARCH_HOTELS: "酒店数据尚未获取",
     AgentAction.GENERATE_PLAN: "基础数据已就绪，需要生成行程",
     AgentAction.ESTIMATE_ROUTES: "行程已生成，需要查询相邻景点的真实路线",
+    AgentAction.EVALUATE_COMMUTE: "\u771f\u5b9e\u8def\u7ebf\u5df2\u5c31\u7eea\uff0c\u9700\u8981\u8bc4\u4f30\u5355\u6bb5\u901a\u52e4\u4e0a\u9650",
+    AgentAction.REPLACE_REMOTE_ATTRACTION: "\u5b58\u5728\u8fc7\u957f\u901a\u52e4\uff0c\u9700\u8981\u7528\u8fd1\u8ddd\u79bb\u672a\u4f7f\u7528\u666f\u70b9\u8fdb\u884c\u6709\u754c\u66ff\u6362",
+    AgentAction.SUPPLEMENT_ATTRACTIONS: "本地候选不足，需要查询高德附近景点补充候选池",
     AgentAction.OPTIMIZE_ROUTES: "路线质量较低，需要执行有界确定性排序优化",
     AgentAction.EVALUATE_SCHEDULE: "行程路线已就绪，需要执行确定性时间轴评估",
     AgentAction.OPTIMIZE_SCHEDULE: "日程存在超时，需要执行有界确定性跨日优化",
     AgentAction.EVALUATE_CONSTRAINTS: "\u65f6\u95f4\u8f74\u5df2\u5c31\u7eea\uff0c\u9700\u8981\u8bc4\u4f30\u884c\u7a0b\u53ef\u6267\u884c\u6027\u7ea6\u675f",
     AgentAction.OPTIMIZE_CONSTRAINTS: "\u884c\u7a0b\u5b58\u5728\u53ef\u4fee\u590d\u7ea6\u675f\u51b2\u7a81\uff0c\u9700\u8981\u6267\u884c\u6709\u754c\u786e\u5b9a\u6027\u4f18\u5316",
+    AgentAction.REFILL_ATTRACTIONS: "\u6700\u7ec8\u666f\u70b9\u6570\u91cf\u4e0d\u8db3\uff0c\u9700\u8981\u4ece\u8fd1\u8ddd\u79bb\u672a\u4f7f\u7528\u5019\u9009\u4e2d\u786e\u5b9a\u6027\u56de\u586b",
+    AgentAction.REBUILD_PLAN_CONTENT: "\u666f\u70b9\u4e0e\u8def\u7ebf\u5df2\u7ecf\u7a33\u5b9a\uff0c\u9700\u8981\u91cd\u5efa\u63cf\u8ff0\u3001\u9910\u996e\u3001\u4ea4\u901a\u548c\u9884\u7b97",
     AgentAction.VALIDATE_PLAN: "行程已生成，需要执行确定性语义校验",
     AgentAction.REPAIR_PLAN: "行程未通过校验，需要根据结构化问题修复",
     AgentAction.FINISH: "行程已通过校验，结束执行",
@@ -106,6 +126,24 @@ class TripOrchestrator:
         constraint_daily_attraction_soft_limit: int = 5,
         constraint_evaluator: ConstraintEvaluator | None = None,
         constraint_optimizer: DeterministicConstraintOptimizer | None = None,
+        max_commute_replacement_attempts: int = 2,
+        commute_replacement_max_candidates: int = 24,
+        max_commute_supplement_searches: int = 2,
+        commute_supplement_initial_radius_meters: int = 5000,
+        commute_supplement_max_radius_meters: int = 20000,
+        commute_supplement_page_size: int = 20,
+        commute_supplement_pool_max_candidates: int = 48,
+        commute_max_walking_minutes: int = 45,
+        commute_max_transit_minutes: int = 90,
+        commute_max_driving_minutes: int = 120,
+        commute_evaluator: CommuteConstraintEvaluator | None = None,
+        commute_optimizer: RemoteAttractionReplacementOptimizer | None = None,
+        minimum_total_attractions: int = 0,
+        max_content_refill_attempts: int = 2,
+        content_refill_max_candidates: int = 24,
+        content_refill_default_visit_duration_minutes: int = 120,
+        content_refill_optimizer: MinimumAttractionRefillOptimizer | None = None,
+        plan_consistency_rebuilder: TripPlanConsistencyRebuilder | None = None,
         max_duration_seconds: float = 180.0,
         max_tool_calls: int = 15,
         max_llm_calls: int = 6,
@@ -148,6 +186,22 @@ class TripOrchestrator:
             raise ValueError(
                 "constraint_optimization_min_improvement_percent cannot be negative"
             )
+        if max_commute_replacement_attempts < 0:
+            raise ValueError("max_commute_replacement_attempts cannot be negative")
+        if commute_replacement_max_candidates < 1:
+            raise ValueError("commute_replacement_max_candidates must be at least 1")
+        if max_commute_supplement_searches < 0:
+            raise ValueError("max_commute_supplement_searches cannot be negative")
+        if minimum_total_attractions < 0:
+            raise ValueError("minimum_total_attractions cannot be negative")
+        if max_content_refill_attempts < 0:
+            raise ValueError("max_content_refill_attempts cannot be negative")
+        if content_refill_max_candidates < 1:
+            raise ValueError("content_refill_max_candidates must be at least 1")
+        if content_refill_default_visit_duration_minutes < 1:
+            raise ValueError(
+                "content_refill_default_visit_duration_minutes must be at least 1"
+            )
         if max_duration_seconds <= 0:
             raise ValueError("max_duration_seconds must be positive")
         if max_tool_calls < 0 or max_llm_calls < 0:
@@ -167,7 +221,9 @@ class TripOrchestrator:
             raise ValueError("execution_policy must use the orchestrator tool_registry")
 
         self.tool_registry = tool_registry
-        self.validator = validator or TripPlanValidator()
+        self.validator = validator or TripPlanValidator(
+            minimum_total_attractions=minimum_total_attractions
+        )
         self.max_steps = max_steps
         self.max_attempts_per_action = max_attempts_per_action
         self.max_repair_attempts = max_repair_attempts
@@ -212,6 +268,44 @@ class TripOrchestrator:
             schedule_evaluator=self.schedule_evaluator,
             max_candidates=constraint_optimization_max_candidates,
         )
+        self.max_commute_replacement_attempts = max_commute_replacement_attempts
+        self.max_commute_supplement_searches = max_commute_supplement_searches
+        self.commute_supplementer = CommuteCandidatePoolSupplementer(
+            initial_radius_meters=commute_supplement_initial_radius_meters,
+            max_radius_meters=commute_supplement_max_radius_meters,
+            page_size=commute_supplement_page_size,
+            pool_max_candidates=commute_supplement_pool_max_candidates,
+        )
+        self.commute_evaluator = commute_evaluator or CommuteConstraintEvaluator(
+            max_walking_minutes=commute_max_walking_minutes,
+            max_transit_minutes=commute_max_transit_minutes,
+            max_driving_minutes=commute_max_driving_minutes,
+        )
+        self.commute_optimizer = (
+            commute_optimizer
+            or RemoteAttractionReplacementOptimizer(
+                max_candidates=commute_replacement_max_candidates,
+                default_visit_duration_minutes=(
+                    content_refill_default_visit_duration_minutes
+                ),
+            )
+        )
+        self.minimum_total_attractions = minimum_total_attractions
+        self.max_content_refill_attempts = max_content_refill_attempts
+        self.content_refill_optimizer = (
+            content_refill_optimizer
+            or MinimumAttractionRefillOptimizer(
+                evaluator=self.schedule_evaluator,
+                minimum_total_attractions=max(1, minimum_total_attractions),
+                max_candidates=content_refill_max_candidates,
+                default_visit_duration_minutes=(
+                    content_refill_default_visit_duration_minutes
+                ),
+            )
+        )
+        self.plan_consistency_rebuilder = (
+            plan_consistency_rebuilder or TripPlanConsistencyRebuilder()
+        )
         self.max_duration_seconds = max_duration_seconds
         self.max_tool_calls = max_tool_calls
         self.max_llm_calls = max_llm_calls
@@ -229,7 +323,7 @@ class TripOrchestrator:
         )
 
     def run(self, request: TripRequest, *, session_id: str | None = None) -> AgentState:
-        """Create and execute a new persisted session."""
+        """创建一个新会话、持久化初始状态并执行确定性循环。"""
 
         # 步骤 1：为新请求创建独立状态，并把执行上限固化到会话预算中。
         state = AgentState.create(
@@ -243,6 +337,10 @@ class TripOrchestrator:
             max_constraint_optimization_attempts=(
                 self.max_constraint_optimization_attempts
             ),
+            max_commute_replacement_attempts=self.max_commute_replacement_attempts,
+            max_commute_supplement_searches=self.max_commute_supplement_searches,
+            max_content_refill_attempts=self.max_content_refill_attempts,
+            minimum_total_attractions=self.minimum_total_attractions,
             max_duration_seconds=self.max_duration_seconds,
             max_tool_calls=self.max_tool_calls,
             max_llm_calls=self.max_llm_calls,
@@ -252,7 +350,7 @@ class TripOrchestrator:
         return self._run_state(state)
 
     def resume(self, state: AgentState) -> AgentState:
-        """Continue a checkpoint without resetting any lifetime execution budget."""
+        """从检查点继续执行，同时保留所有会话生命周期预算。"""
 
         # 已完成会话保持幂等，重复恢复不会再次调用高德或 LLM。
         if state.finished or state.status == "completed":
@@ -304,7 +402,7 @@ class TripOrchestrator:
 
     @staticmethod
     def decide_next_action(state: AgentState) -> AgentAction:
-        """Choose the next action from state only; no LLM is involved."""
+        """仅根据 AgentState 确定下一动作，决策过程不调用 LLM。"""
 
         # 先按顺序补齐三类外部事实数据。
         if state.attractions is None:
@@ -323,15 +421,15 @@ class TripOrchestrator:
         ):
             return AgentAction.ESTIMATE_ROUTES
 
-        # Every current route snapshot must have a score before downstream
-        # schedule evaluation. This also upgrades older SQLite checkpoints.
+        # 当前路线快照必须先完成质量评分，才能进入后续时间轴评估；
+        # 该步骤也用于自动补齐旧版 SQLite 检查点缺失的路线评分。
         if (
             state.route_quality_report is None
             or state.route_quality_plan_fingerprint != current_route_fingerprint
         ):
             return AgentAction.OPTIMIZE_ROUTES
 
-        # Route ordering always reaches a terminal state before schedule balancing.
+        # 路线排序优化必须先达到完成或跳过状态，才能进行跨日日程平衡。
         if state.route_optimization_status == "candidate_pending":
             return AgentAction.OPTIMIZE_ROUTES
         if (
@@ -342,22 +440,141 @@ class TripOrchestrator:
         ):
             return AgentAction.OPTIMIZE_ROUTES
 
-        # Build a timeline locally for old checkpoints or stale plan-derived data.
+        # 先完成旧优化阶段遗留候选的真实路线复验，
+        # 再开始通勤替换，避免不同优化器的回滚基线发生嵌套。
+        schedule_current = (
+            state.schedule_quality_report is not None
+            and state.schedule_quality_plan_fingerprint == current_route_fingerprint
+        )
+        if state.schedule_optimization_status == "candidate_pending":
+            return (
+                AgentAction.OPTIMIZE_SCHEDULE
+                if schedule_current
+                else AgentAction.EVALUATE_SCHEDULE
+            )
+        if state.constraint_optimization_status == "candidate_pending":
+            if not schedule_current:
+                return AgentAction.EVALUATE_SCHEDULE
+            current_constraint_fingerprint = constraint_plan_fingerprint(
+                state.request,
+                state.trip_plan,
+            )
+            if (
+                state.constraint_report is None
+                or state.constraint_plan_fingerprint != current_constraint_fingerprint
+            ):
+                return AgentAction.EVALUATE_CONSTRAINTS
+            return AgentAction.OPTIMIZE_CONSTRAINTS
+        if state.content_refill_status == "candidate_pending":
+            if not schedule_current:
+                return AgentAction.EVALUATE_SCHEDULE
+            current_constraint_fingerprint = constraint_plan_fingerprint(
+                state.request,
+                state.trip_plan,
+            )
+            if (
+                state.constraint_report is None
+                or state.constraint_plan_fingerprint != current_constraint_fingerprint
+            ):
+                return AgentAction.EVALUATE_CONSTRAINTS
+            return AgentAction.REFILL_ATTRACTIONS
+
+        # 后续优化器可能移动或删除过远景点，因此必须先按交通方式评估
+        # 单段通勤上限，保留问题根因。
         if (
-            state.schedule_quality_report is None
-            or state.schedule_quality_plan_fingerprint != current_route_fingerprint
+            state.commute_report is None
+            or state.commute_plan_fingerprint != current_route_fingerprint
         ):
+            return AgentAction.EVALUATE_COMMUTE
+
+        # 对旧检查点或已经过期的派生数据，在本地重新构建完整时间轴。
+        if not schedule_current:
             return AgentAction.EVALUATE_SCHEDULE
 
-        # A moved attraction receives fresh real routes before acceptance.
-        if state.schedule_optimization_status == "candidate_pending":
-            return AgentAction.OPTIMIZE_SCHEDULE
+        # 候选池补充作为显式工具动作执行，使 HTTP 超时、
+        # 指数退避、执行预算和熔断器仍由统一策略管理。
+        if state.commute_optimization_status == "supplement_needed":
+            return AgentAction.SUPPLEMENT_ATTRACTIONS
+
+        # 过远景点替换候选必须使用新的高德真实路线、
+        # 完整时间轴和可执行性约束复验后才能接受。
+        commute_needs_action = (
+            state.commute_optimization_status == "candidate_pending"
+            or (
+                state.commute_optimization_status == "not_started"
+                and state.commute_report.optimization_recommended
+            )
+        )
+        if commute_needs_action:
+            current_constraint_fingerprint = constraint_plan_fingerprint(
+                state.request,
+                state.trip_plan,
+            )
+            if (
+                state.constraint_report is None
+                or state.constraint_plan_fingerprint != current_constraint_fingerprint
+            ):
+                return AgentAction.EVALUATE_CONSTRAINTS
+            return AgentAction.REPLACE_REMOTE_ATTRACTION
+
+        # 跨日移动后的景点必须重新查询真实路线，不能直接接受近似结果。
         if (
             state.schedule_optimization_status == "not_started"
             and state.schedule_quality_report.optimization_recommended
         ):
             return AgentAction.OPTIMIZE_SCHEDULE
 
+        required_attractions = min(
+            state.execution_budget.minimum_total_attractions,
+            max(1, state.request.travel_days),
+        )
+        refill_needed = (
+            count_attractions(state.trip_plan) < required_attractions
+            and state.content_refill_status not in {"completed", "skipped"}
+            and state.content_refill_count
+            < state.execution_budget.max_content_refill_attempts
+        )
+
+        # 景点回填候选及其基线都必须先完成当前可执行性约束评估；
+        # 景点结构稳定后再重建描述和费用，
+        # 并在最终约束检查前生成派生用餐和预算数据，
+        # 从而避免无意义的重复评估。
+        constraints_required_for_refill = (
+            state.content_refill_status == "candidate_pending"
+            or refill_needed
+            or state.constraint_optimization_status == "candidate_pending"
+        )
+        current_constraint_fingerprint = constraint_plan_fingerprint(
+            state.request,
+            state.trip_plan,
+        )
+        constraints_current = (
+            state.constraint_report is not None
+            and state.constraint_plan_fingerprint == current_constraint_fingerprint
+        )
+        if constraints_required_for_refill:
+            if not constraints_current:
+                return AgentAction.EVALUATE_CONSTRAINTS
+            if state.constraint_optimization_status == "candidate_pending":
+                return AgentAction.OPTIMIZE_CONSTRAINTS
+            if (
+                state.constraint_optimization_status == "not_started"
+                and state.constraint_report.optimization_recommended
+            ):
+                return AgentAction.OPTIMIZE_CONSTRAINTS
+            return AgentAction.REFILL_ATTRACTIONS
+
+        content_fingerprint = plan_content_source_fingerprint(
+            state.request,
+            state.trip_plan,
+            state.route_estimates,
+            state.schedule_quality_report,
+        )
+        if state.plan_consistency_fingerprint != content_fingerprint:
+            return AgentAction.REBUILD_PLAN_CONTENT
+
+        # 重建描述、餐饮、交通文案和预算会改变约束输入，
+        # 因此完成内容重建后必须刷新最终约束报告。
         current_constraint_fingerprint = constraint_plan_fingerprint(
             state.request,
             state.trip_plan,
@@ -395,7 +612,7 @@ class TripOrchestrator:
         *,
         attempt_in_run: int | None = None,
     ) -> None:
-        """Execute one action and record every physical tool attempt."""
+        """执行一个动作，并记录实际发生的每一次工具调用尝试。"""
 
         # 步骤 1：先递增步骤和动作尝试次数，确保日志能反映真实物理调用。
         state.current_step += 1
@@ -424,9 +641,15 @@ class TripOrchestrator:
             return
 
         # 步骤 4：其余动作通过 ExecutionPolicy 调用白名单工具。
-        # Local deterministic optimization consumes neither tool nor LLM budget.
+        # 本地确定性评估和优化不消耗工具调用预算，也不消耗 LLM 预算。
         if action is AgentAction.OPTIMIZE_ROUTES:
             self._optimize_routes(state, reason, lifetime_attempt)
+            return
+        if action is AgentAction.EVALUATE_COMMUTE:
+            self._evaluate_commute(state, reason, lifetime_attempt)
+            return
+        if action is AgentAction.REPLACE_REMOTE_ATTRACTION:
+            self._replace_remote_attraction(state, reason, lifetime_attempt)
             return
         if action is AgentAction.EVALUATE_SCHEDULE:
             self._evaluate_schedule(state, reason, lifetime_attempt)
@@ -439,6 +662,12 @@ class TripOrchestrator:
             return
         if action is AgentAction.OPTIMIZE_CONSTRAINTS:
             self._optimize_constraints(state, reason, lifetime_attempt)
+            return
+        if action is AgentAction.REFILL_ATTRACTIONS:
+            self._refill_attractions(state, reason, lifetime_attempt)
+            return
+        if action is AgentAction.REBUILD_PLAN_CONTENT:
+            self._rebuild_plan_content(state, reason, lifetime_attempt)
             return
 
         tool_result = self.execution_policy.execute_once(
@@ -481,6 +710,12 @@ class TripOrchestrator:
                 self.execution_policy.sleep_before_retry(decision.delay_seconds)
                 return
 
+            if action is AgentAction.SUPPLEMENT_ATTRACTIONS:
+                self._handle_failed_commute_supplement(
+                    state,
+                    tool_result.error or "Amap nearby candidate search failed",
+                )
+                return
             state.status = "failed"
             raise AgentActionError(
                 action,
@@ -526,6 +761,12 @@ class TripOrchestrator:
                 self._checkpoint(state)
                 self.execution_policy.sleep_before_retry(decision.delay_seconds)
                 return
+            if action is AgentAction.SUPPLEMENT_ATTRACTIONS:
+                self._handle_failed_commute_supplement(
+                    state,
+                    invalid_result.error or "Amap nearby candidate search failed",
+                )
+                return
             state.status = "failed"
             raise AgentActionError(
                 action,
@@ -550,7 +791,7 @@ class TripOrchestrator:
 
     @staticmethod
     def _refresh_route_quality(state: AgentState):
-        """Build the quality report for the current plan and route snapshot."""
+        """基于当前行程和路线快照生成路线质量报告。"""
 
         if state.trip_plan is None or state.route_estimates is None:
             raise ValueError("Trip plan and route estimates are required for scoring")
@@ -569,7 +810,7 @@ class TripOrchestrator:
         *,
         reset_optimization_count: bool,
     ) -> None:
-        """Clear route-derived data after a plan mutation."""
+        """行程结构变化后清理所有由旧路线派生的数据。"""
 
         state.route_estimates = None
         state.route_plan_fingerprint = None
@@ -581,6 +822,10 @@ class TripOrchestrator:
         state.route_optimization_baseline_routes = None
         state.route_optimization_baseline_quality = None
         state.route_optimization_baseline_fingerprint = None
+        TripOrchestrator._clear_commute_analysis(
+            state,
+            reset_optimization_count=reset_optimization_count,
+        )
         state.schedule_quality_report = None
         state.schedule_quality_plan_fingerprint = None
         state.schedule_optimization_status = "not_started"
@@ -597,6 +842,7 @@ class TripOrchestrator:
         if reset_optimization_count:
             state.route_optimization_count = 0
             state.schedule_optimization_count = 0
+        state.plan_consistency_fingerprint = None
         state.last_validation_result = None
 
     @staticmethod
@@ -605,7 +851,7 @@ class TripOrchestrator:
         *,
         reset_optimization_count: bool,
     ) -> None:
-        """Clear all reports and baselines derived from execution constraints."""
+        """清理所有由旧可执行性约束派生的报告和优化基线。"""
 
         state.constraint_report = None
         state.constraint_plan_fingerprint = None
@@ -650,7 +896,7 @@ class TripOrchestrator:
         reason: str,
         lifetime_attempt: int,
     ) -> None:
-        """Propose or resolve one bounded route-order candidate."""
+        """生成或复验一个有界的路线顺序优化候选。"""
 
         if state.trip_plan is None or state.route_estimates is None:
             raise ValueError("Trip plan and route estimates are required for optimization")
@@ -662,8 +908,8 @@ class TripOrchestrator:
         ):
             report = self._refresh_route_quality(state)
 
-        # Second pass: compare the candidate's real Amap route quality with the
-        # persisted baseline. Rejecting restores all baseline data without a call.
+        # 第二轮使用候选的高德真实路线质量与已持久化基线比较；
+        # 如果拒绝候选，则直接恢复完整基线数据，不重复调用外部服务。
         if state.route_optimization_status == "candidate_pending":
             baseline_plan = state.route_optimization_baseline_plan
             baseline_routes = state.route_optimization_baseline_routes
@@ -778,6 +1024,8 @@ class TripOrchestrator:
         state.route_optimization_baseline_fingerprint = current_fingerprint
         state.route_optimization_candidate = candidate.model_copy(deep=True)
         state.trip_plan = candidate.plan.model_copy(deep=True)
+        self._clear_commute_analysis(state, reset_optimization_count=False)
+        state.plan_consistency_fingerprint = None
         state.route_optimization_count += 1
         state.route_optimization_status = "candidate_pending"
         state.route_estimates = None
@@ -797,8 +1045,467 @@ class TripOrchestrator:
         state.last_validation_result = None
         self._record_local_route_action(state, reason, lifetime_attempt)
 
+    def _refresh_commute_report(self, state: AgentState):
+        """对当前真实路线执行分交通方式的单段通勤上限评估。"""
+
+        if state.trip_plan is None or state.route_estimates is None:
+            raise ValueError("Trip plan and route estimates are required for commute evaluation")
+        current_fingerprint = plan_route_fingerprint(state.request, state.trip_plan)
+        report = self.commute_evaluator.evaluate(
+            state.request,
+            state.trip_plan,
+            state.route_estimates,
+        )
+        if report.plan_fingerprint != current_fingerprint:
+            raise ValueError("Commute report does not match the current trip plan")
+        previous_fingerprint = state.commute_plan_fingerprint
+        state.commute_report = report
+        state.commute_plan_fingerprint = current_fingerprint
+        if (
+            report.optimization_recommended
+            and previous_fingerprint != current_fingerprint
+            and state.commute_optimization_status in {"completed", "skipped"}
+        ):
+            state.commute_optimization_status = "not_started"
+        elif (
+            state.commute_optimization_status == "not_started"
+            and not report.optimization_recommended
+        ):
+            state.commute_optimization_status = "skipped"
+        return report
+
+    @staticmethod
+    def _clear_commute_baseline(state: AgentState) -> None:
+        state.commute_candidate = None
+        state.commute_baseline_plan = None
+        state.commute_baseline_routes = None
+        state.commute_baseline_route_quality = None
+        state.commute_baseline_report = None
+        state.commute_baseline_schedule = None
+        state.commute_baseline_constraint_report = None
+        state.commute_baseline_route_fingerprint = None
+        state.commute_baseline_constraint_fingerprint = None
+
+    @staticmethod
+    def _clear_commute_analysis(
+        state: AgentState,
+        *,
+        reset_optimization_count: bool,
+    ) -> None:
+        state.commute_report = None
+        state.commute_plan_fingerprint = None
+        state.commute_optimization_status = "not_started"
+        state.commute_supplement_query = None
+        TripOrchestrator._clear_commute_baseline(state)
+        if reset_optimization_count:
+            state.commute_replacement_count = 0
+            state.commute_supplement_search_count = 0
+            state.commute_excluded_candidate_identities = []
+
+    @staticmethod
+    def _record_local_commute_action(
+        state: AgentState,
+        action: AgentAction,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        state.action_history.append(
+            ActionRecord(
+                step=state.current_step,
+                action=action,
+                reason=reason,
+                attempt=lifetime_attempt,
+                success=True,
+            )
+        )
+
+    def _handle_failed_commute_supplement(
+        self,
+        state: AgentState,
+        error: str,
+    ) -> None:
+        """高德周边补搜失败时安全降级，保留当前有效行程。"""
+
+        query = state.commute_supplement_query
+        if query is not None:
+            state.commute_supplement_search_count += 1
+            state.commute_supplement_history.append(
+                CommuteSupplementRecord(
+                    attempt=state.commute_supplement_search_count,
+                    status="failed",
+                    reason="Optional nearby candidate search failed; kept current plan",
+                    target_attraction_name=query.target_attraction_name,
+                    day_index=query.day_index,
+                    attraction_index=query.attraction_index,
+                    anchor_names=query.anchor_names,
+                    center_longitude=query.center.longitude,
+                    center_latitude=query.center.latitude,
+                    radius_meters=query.radius_meters,
+                    error=error,
+                )
+            )
+        state.commute_supplement_query = None
+        state.commute_optimization_status = "skipped"
+
+    def _evaluate_commute(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        self._refresh_commute_report(state)
+        self._record_local_commute_action(
+            state,
+            AgentAction.EVALUATE_COMMUTE,
+            reason,
+            lifetime_attempt,
+        )
+
+    def _replace_remote_attraction(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        """生成或使用真实路线复验一个有界近距离景点替换候选。"""
+
+        if state.trip_plan is None or state.route_estimates is None:
+            raise ValueError("Trip plan and route estimates are required for commute replacement")
+        if any(
+            item is None
+            for item in (
+                state.route_quality_report,
+                state.commute_report,
+                state.schedule_quality_report,
+                state.constraint_report,
+            )
+        ):
+            raise ValueError("Route, commute, schedule and constraint reports are required")
+
+        if state.commute_optimization_status == "candidate_pending":
+            baseline_plan = state.commute_baseline_plan
+            baseline_routes = state.commute_baseline_routes
+            baseline_route_quality = state.commute_baseline_route_quality
+            baseline_report = state.commute_baseline_report
+            baseline_schedule = state.commute_baseline_schedule
+            baseline_constraint = state.commute_baseline_constraint_report
+            baseline_route_fingerprint = state.commute_baseline_route_fingerprint
+            baseline_constraint_fingerprint = (
+                state.commute_baseline_constraint_fingerprint
+            )
+            candidate = state.commute_candidate
+            if any(
+                item is None
+                for item in (
+                    baseline_plan,
+                    baseline_routes,
+                    baseline_route_quality,
+                    baseline_report,
+                    baseline_schedule,
+                    baseline_constraint,
+                    baseline_route_fingerprint,
+                    baseline_constraint_fingerprint,
+                    candidate,
+                )
+            ):
+                raise ValueError("Pending commute replacement is missing verification data")
+
+            current_report = state.commute_report
+            current_route_quality = state.route_quality_report
+            current_schedule = state.schedule_quality_report
+            current_constraint = state.constraint_report
+            assert baseline_plan is not None
+            assert baseline_routes is not None
+            assert baseline_route_quality is not None
+            assert baseline_report is not None
+            assert baseline_schedule is not None
+            assert baseline_constraint is not None
+            assert baseline_route_fingerprint is not None
+            assert baseline_constraint_fingerprint is not None
+            assert candidate is not None
+            assert current_report is not None
+            assert current_route_quality is not None
+            assert current_schedule is not None
+            assert current_constraint is not None
+
+            route_safe = (
+                current_route_quality.unavailable_legs
+                <= baseline_route_quality.unavailable_legs
+            )
+            commute_improved = (
+                current_report.excessive_segment_count
+                < baseline_report.excessive_segment_count
+                and current_report.max_duration_seconds
+                < baseline_report.max_duration_seconds
+            )
+            normalized_replacement = "".join(
+                candidate.replacement_attraction_name.lower().split()
+            )
+            replacement_still_excessive = any(
+                normalized_replacement
+                in {
+                    "".join(issue.origin_name.lower().split()),
+                    "".join(issue.destination_name.lower().split()),
+                    "".join(issue.target_attraction_name.lower().split()),
+                }
+                for issue in current_report.issues
+            )
+            schedule_safe = (
+                current_schedule.total_overtime_minutes == 0
+                and current_schedule.infeasible_days == 0
+            )
+            constraints_safe = current_constraint.error_count == 0
+            attraction_count_stable = (
+                count_attractions(state.trip_plan) == count_attractions(baseline_plan)
+            )
+            accepted = (
+                route_safe
+                and commute_improved
+                and not replacement_still_excessive
+                and schedule_safe
+                and constraints_safe
+                and attraction_count_stable
+            )
+            candidate_fingerprint = plan_route_fingerprint(
+                state.request,
+                state.trip_plan,
+            )
+
+            if accepted:
+                outcome_status = "accepted"
+                outcome_reason = (
+                    "Replacement accepted after real routes reduced excessive "
+                    "single-leg commutes and schedule constraints remained feasible"
+                )
+                if current_report.optimization_recommended:
+                    state.commute_optimization_status = (
+                        "not_started"
+                        if state.commute_replacement_count
+                        < state.execution_budget.max_commute_replacement_attempts
+                        else "skipped"
+                    )
+                else:
+                    state.commute_optimization_status = "completed"
+                state.plan_consistency_fingerprint = None
+                state.last_validation_result = None
+            else:
+                outcome_status = "reverted"
+                outcome_reason = (
+                    "Replacement reverted because real routes did not materially "
+                    "reduce the excessive commute or feasibility checks regressed"
+                )
+                identity = content_attraction_identity(
+                    poi_id=candidate.replacement_attraction_id,
+                    name=candidate.replacement_attraction_name,
+                )
+                if identity not in state.commute_excluded_candidate_identities:
+                    state.commute_excluded_candidate_identities.append(identity)
+                state.trip_plan = baseline_plan.model_copy(deep=True)
+                state.route_estimates = deepcopy(baseline_routes)
+                state.route_plan_fingerprint = baseline_route_fingerprint
+                state.route_quality_report = baseline_route_quality.model_copy(deep=True)
+                state.route_quality_plan_fingerprint = baseline_route_fingerprint
+                state.commute_report = baseline_report.model_copy(deep=True)
+                state.commute_plan_fingerprint = baseline_route_fingerprint
+                state.schedule_quality_report = baseline_schedule.model_copy(deep=True)
+                state.schedule_quality_plan_fingerprint = baseline_route_fingerprint
+                state.constraint_report = baseline_constraint.model_copy(deep=True)
+                state.constraint_plan_fingerprint = baseline_constraint_fingerprint
+                state.commute_optimization_status = (
+                    "not_started"
+                    if state.commute_replacement_count
+                    < state.execution_budget.max_commute_replacement_attempts
+                    else "skipped"
+                )
+                state.plan_consistency_fingerprint = None
+                state.last_validation_result = None
+
+            state.commute_replacement_history.append(
+                CommuteReplacementRecord(
+                    attempt=state.commute_replacement_count,
+                    status=outcome_status,
+                    reason=outcome_reason,
+                    day_index=candidate.day_index,
+                    attraction_index=candidate.attraction_index,
+                    replaced_attraction_name=candidate.replaced_attraction_name,
+                    replacement_attraction_name=candidate.replacement_attraction_name,
+                    replacement_attraction_id=candidate.replacement_attraction_id,
+                    baseline_excessive_segments=(
+                        baseline_report.excessive_segment_count
+                    ),
+                    candidate_excessive_segments=(
+                        current_report.excessive_segment_count
+                    ),
+                    baseline_max_duration_seconds=(
+                        baseline_report.max_duration_seconds
+                    ),
+                    candidate_max_duration_seconds=(
+                        current_report.max_duration_seconds
+                    ),
+                    baseline_fingerprint=baseline_route_fingerprint,
+                    candidate_fingerprint=candidate_fingerprint,
+                )
+            )
+            self._clear_commute_baseline(state)
+            self._record_local_commute_action(
+                state,
+                AgentAction.REPLACE_REMOTE_ATTRACTION,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        if (
+            state.commute_replacement_count
+            >= state.execution_budget.max_commute_replacement_attempts
+        ):
+            state.commute_optimization_status = "skipped"
+            state.commute_replacement_history.append(
+                CommuteReplacementRecord(
+                    attempt=state.commute_replacement_count,
+                    status="skipped",
+                    reason="Commute replacement attempt budget is exhausted",
+                    baseline_excessive_segments=(
+                        state.commute_report.excessive_segment_count
+                    ),
+                    candidate_excessive_segments=(
+                        state.commute_report.excessive_segment_count
+                    ),
+                    baseline_max_duration_seconds=(
+                        state.commute_report.max_duration_seconds
+                    ),
+                    candidate_max_duration_seconds=(
+                        state.commute_report.max_duration_seconds
+                    ),
+                    baseline_fingerprint=plan_route_fingerprint(
+                        state.request,
+                        state.trip_plan,
+                    ),
+                )
+            )
+            self._record_local_commute_action(
+                state,
+                AgentAction.REPLACE_REMOTE_ATTRACTION,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        candidate = self.commute_optimizer.optimize(
+            state.request,
+            state.trip_plan,
+            state.commute_report,
+            attractions=state.attractions,
+            excluded_candidate_identities=set(
+                state.commute_excluded_candidate_identities
+            ),
+        )
+        if candidate is None:
+            if (
+                state.commute_supplement_search_count
+                < state.execution_budget.max_commute_supplement_searches
+            ):
+                query = self.commute_supplementer.build_query(
+                    state.request,
+                    state.trip_plan,
+                    state.commute_report,
+                    search_index=state.commute_supplement_search_count,
+                )
+                if query is not None:
+                    state.commute_supplement_query = query
+                    state.commute_optimization_status = "supplement_needed"
+                    self._record_local_commute_action(
+                        state,
+                        AgentAction.REPLACE_REMOTE_ATTRACTION,
+                        reason,
+                        lifetime_attempt,
+                    )
+                    return
+
+            state.commute_optimization_status = "skipped"
+            state.commute_replacement_history.append(
+                CommuteReplacementRecord(
+                    attempt=state.commute_replacement_count,
+                    status="skipped",
+                    reason="No nearer unused Amap candidate was found",
+                    baseline_excessive_segments=(
+                        state.commute_report.excessive_segment_count
+                    ),
+                    candidate_excessive_segments=(
+                        state.commute_report.excessive_segment_count
+                    ),
+                    baseline_max_duration_seconds=(
+                        state.commute_report.max_duration_seconds
+                    ),
+                    candidate_max_duration_seconds=(
+                        state.commute_report.max_duration_seconds
+                    ),
+                    baseline_fingerprint=plan_route_fingerprint(
+                        state.request,
+                        state.trip_plan,
+                    ),
+                )
+            )
+            self._record_local_commute_action(
+                state,
+                AgentAction.REPLACE_REMOTE_ATTRACTION,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        assert state.route_quality_report is not None
+        assert state.schedule_quality_report is not None
+        assert state.constraint_report is not None
+        baseline_route_fingerprint = plan_route_fingerprint(
+            state.request,
+            state.trip_plan,
+        )
+        baseline_constraint_fingerprint = constraint_plan_fingerprint(
+            state.request,
+            state.trip_plan,
+        )
+        state.commute_baseline_plan = state.trip_plan.model_copy(deep=True)
+        state.commute_baseline_routes = deepcopy(state.route_estimates)
+        state.commute_baseline_route_quality = (
+            state.route_quality_report.model_copy(deep=True)
+        )
+        state.commute_baseline_report = state.commute_report.model_copy(deep=True)
+        state.commute_baseline_schedule = (
+            state.schedule_quality_report.model_copy(deep=True)
+        )
+        state.commute_baseline_constraint_report = (
+            state.constraint_report.model_copy(deep=True)
+        )
+        state.commute_baseline_route_fingerprint = baseline_route_fingerprint
+        state.commute_baseline_constraint_fingerprint = (
+            baseline_constraint_fingerprint
+        )
+        state.commute_candidate = candidate.model_copy(deep=True)
+        state.trip_plan = candidate.plan.model_copy(deep=True)
+        state.commute_replacement_count += 1
+        state.commute_optimization_status = "candidate_pending"
+        state.route_estimates = None
+        state.route_plan_fingerprint = None
+        state.route_quality_report = None
+        state.route_quality_plan_fingerprint = None
+        state.commute_report = None
+        state.commute_plan_fingerprint = None
+        state.schedule_quality_report = None
+        state.schedule_quality_plan_fingerprint = None
+        state.constraint_report = None
+        state.constraint_plan_fingerprint = None
+        state.plan_consistency_fingerprint = None
+        state.last_validation_result = None
+        self._record_local_commute_action(
+            state,
+            AgentAction.REPLACE_REMOTE_ATTRACTION,
+            reason,
+            lifetime_attempt,
+        )
+
     def _refresh_schedule_quality(self, state: AgentState):
-        """Build the current timeline report from the persisted route snapshot."""
+        """使用已持久化的路线快照构建当前完整时间轴报告。"""
 
         if state.trip_plan is None or state.route_estimates is None:
             raise ValueError("Trip plan and route estimates are required for schedule scoring")
@@ -863,7 +1570,7 @@ class TripOrchestrator:
         reason: str,
         lifetime_attempt: int,
     ) -> None:
-        """Evaluate a stale/legacy checkpoint without invoking any external tool."""
+        """不调用外部工具，对过期或旧版本检查点进行本地时间轴评估。"""
 
         self._refresh_schedule_quality(state)
         self._record_local_schedule_action(
@@ -879,7 +1586,7 @@ class TripOrchestrator:
         reason: str,
         lifetime_attempt: int,
     ) -> None:
-        """Propose or resolve one bounded cross-day schedule candidate."""
+        """生成或复验一个有界的跨日时间轴优化候选。"""
 
         if state.trip_plan is None or state.route_estimates is None:
             raise ValueError("Trip plan and route estimates are required for schedule optimization")
@@ -891,7 +1598,7 @@ class TripOrchestrator:
         ):
             report = self._refresh_schedule_quality(state)
 
-        # Verification pass after Amap routes have been fetched for the candidate.
+        # 候选已经取得新的高德路线后，进入第二轮真实结果复验。
         if state.schedule_optimization_status == "candidate_pending":
             baseline_plan = state.schedule_optimization_baseline_plan
             baseline_routes = state.schedule_optimization_baseline_routes
@@ -1065,10 +1772,12 @@ class TripOrchestrator:
         state.schedule_optimization_baseline_fingerprint = current_fingerprint
         state.schedule_optimization_candidate = candidate.model_copy(deep=True)
         state.trip_plan = candidate.plan.model_copy(deep=True)
+        self._clear_commute_analysis(state, reset_optimization_count=False)
+        state.plan_consistency_fingerprint = None
         state.schedule_optimization_count += 1
         state.schedule_optimization_status = "candidate_pending"
-        # Route-order optimization has already terminated. Clearing only route
-        # snapshots prevents the moved plan from re-entering that earlier phase.
+        # 路线排序优化已经结束，因此这里只清理路线快照，
+        # 防止跨日移动后的行程重新进入更早的路线排序阶段。
         state.route_estimates = None
         state.route_plan_fingerprint = None
         state.route_quality_report = None
@@ -1085,7 +1794,7 @@ class TripOrchestrator:
         )
 
     def _refresh_constraint_report(self, state: AgentState):
-        """Evaluate current plan feasibility from persisted facts and timeline."""
+        """使用已持久化事实和时间轴评估当前行程可执行性。"""
 
         if state.trip_plan is None or state.schedule_quality_report is None:
             raise ValueError("Trip plan and schedule report are required for constraint evaluation")
@@ -1152,7 +1861,7 @@ class TripOrchestrator:
         reason: str,
         lifetime_attempt: int,
     ) -> None:
-        """Evaluate real-world execution constraints without external calls."""
+        """不调用外部服务，评估真实场景下的行程执行约束。"""
 
         self._refresh_constraint_report(state)
         self._record_local_constraint_action(
@@ -1168,7 +1877,7 @@ class TripOrchestrator:
         reason: str,
         lifetime_attempt: int,
     ) -> None:
-        """Propose or verify one bounded deterministic conflict-resolution candidate."""
+        """生成或复验一个有界、确定性的约束冲突修复候选。"""
 
         if state.trip_plan is None or state.route_estimates is None:
             raise ValueError("Trip plan and route estimates are required for constraint optimization")
@@ -1367,9 +2076,11 @@ class TripOrchestrator:
         state.constraint_optimization_baseline_fingerprint = current_fingerprint
         state.constraint_optimization_candidate = candidate.model_copy(deep=True)
         state.trip_plan = candidate.plan.model_copy(deep=True)
+        self._clear_commute_analysis(state, reset_optimization_count=False)
+        state.plan_consistency_fingerprint = None
         state.constraint_optimization_count += 1
         state.constraint_optimization_status = "candidate_pending"
-        # Real Amap routes and the timeline must be rebuilt before acceptance.
+        # 候选被接受前必须重新构建高德真实路线和完整时间轴。
         state.route_estimates = None
         state.route_plan_fingerprint = None
         state.route_quality_report = None
@@ -1382,6 +2093,331 @@ class TripOrchestrator:
         self._record_local_constraint_action(
             state,
             AgentAction.OPTIMIZE_CONSTRAINTS,
+            reason,
+            lifetime_attempt,
+        )
+
+    @staticmethod
+    def _clear_content_refill_baseline(state: AgentState) -> None:
+        state.content_refill_candidate = None
+        state.content_refill_baseline_plan = None
+        state.content_refill_baseline_routes = None
+        state.content_refill_baseline_route_quality = None
+        state.content_refill_baseline_schedule = None
+        state.content_refill_baseline_constraint_report = None
+        state.content_refill_baseline_route_fingerprint = None
+        state.content_refill_baseline_constraint_fingerprint = None
+
+    @staticmethod
+    def _record_local_content_action(
+        state: AgentState,
+        action: AgentAction,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        state.action_history.append(
+            ActionRecord(
+                step=state.current_step,
+                action=action,
+                reason=reason,
+                attempt=lifetime_attempt,
+                success=True,
+            )
+        )
+
+    def _refill_attractions(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        """生成或复验一个使用附近未使用 POI 的最低景点回填候选。"""
+
+        if state.trip_plan is None:
+            raise ValueError("Trip plan is required for attraction refill")
+        required = min(
+            state.execution_budget.minimum_total_attractions,
+            max(1, state.request.travel_days),
+        )
+
+        if state.content_refill_status == "candidate_pending":
+            baseline_plan = state.content_refill_baseline_plan
+            baseline_routes = state.content_refill_baseline_routes
+            baseline_route_quality = state.content_refill_baseline_route_quality
+            baseline_schedule = state.content_refill_baseline_schedule
+            baseline_constraint = state.content_refill_baseline_constraint_report
+            baseline_route_fingerprint = state.content_refill_baseline_route_fingerprint
+            baseline_constraint_fingerprint = (
+                state.content_refill_baseline_constraint_fingerprint
+            )
+            candidate = state.content_refill_candidate
+            if any(
+                item is None
+                for item in (
+                    baseline_plan,
+                    baseline_routes,
+                    baseline_route_quality,
+                    baseline_schedule,
+                    baseline_constraint,
+                    baseline_route_fingerprint,
+                    baseline_constraint_fingerprint,
+                    candidate,
+                    state.route_quality_report,
+                    state.schedule_quality_report,
+                    state.constraint_report,
+                )
+            ):
+                raise ValueError("Pending content refill is missing verification data")
+
+            assert baseline_plan is not None
+            assert baseline_routes is not None
+            assert baseline_route_quality is not None
+            assert baseline_schedule is not None
+            assert baseline_constraint is not None
+            assert baseline_route_fingerprint is not None
+            assert baseline_constraint_fingerprint is not None
+            assert candidate is not None
+            assert state.route_quality_report is not None
+            assert state.schedule_quality_report is not None
+            assert state.constraint_report is not None
+
+            candidate_route_fingerprint = plan_route_fingerprint(
+                state.request,
+                state.trip_plan,
+            )
+            route_safe = (
+                state.route_quality_report.unavailable_legs
+                <= baseline_route_quality.unavailable_legs
+                and state.route_quality_report.excessive_duration_legs
+                <= baseline_route_quality.excessive_duration_legs
+            )
+            schedule_safe = (
+                state.schedule_quality_report.total_overtime_minutes == 0
+                and state.schedule_quality_report.infeasible_days == 0
+            )
+            constraints_safe = state.constraint_report.error_count == 0
+            minimum_met = count_attractions(state.trip_plan) >= required
+            accepted = route_safe and schedule_safe and constraints_safe and minimum_met
+
+            if accepted:
+                status = "accepted"
+                outcome_reason = (
+                    "Refill accepted after real routes, schedule and constraints "
+                    "confirmed the minimum attraction count"
+                )
+                state.content_refill_status = "completed"
+            else:
+                status = "reverted"
+                outcome_reason = (
+                    "Refill reverted because minimum content or verified route, "
+                    "schedule and constraint safety requirements were not met"
+                )
+                for name, poi_id in zip(
+                    candidate.added_attraction_names,
+                    candidate.added_attraction_ids,
+                ):
+                    identity = content_attraction_identity(poi_id=poi_id, name=name)
+                    if identity not in state.content_refill_excluded_identities:
+                        state.content_refill_excluded_identities.append(identity)
+                state.trip_plan = baseline_plan.model_copy(deep=True)
+                state.route_estimates = deepcopy(baseline_routes)
+                state.route_plan_fingerprint = baseline_route_fingerprint
+                state.route_quality_report = baseline_route_quality.model_copy(deep=True)
+                state.route_quality_plan_fingerprint = baseline_route_fingerprint
+                state.schedule_quality_report = baseline_schedule.model_copy(deep=True)
+                state.schedule_quality_plan_fingerprint = baseline_route_fingerprint
+                state.constraint_report = baseline_constraint.model_copy(deep=True)
+                state.constraint_plan_fingerprint = baseline_constraint_fingerprint
+                state.content_refill_status = (
+                    "not_started"
+                    if state.content_refill_count
+                    < state.execution_budget.max_content_refill_attempts
+                    else "skipped"
+                )
+
+            state.content_refill_history.append(
+                ContentRefillRecord(
+                    attempt=state.content_refill_count,
+                    status=status,
+                    reason=outcome_reason,
+                    added_attraction_names=candidate.added_attraction_names,
+                    added_attraction_ids=candidate.added_attraction_ids,
+                    target_day_indices=candidate.target_day_indices,
+                    baseline_attraction_count=candidate.baseline_attraction_count,
+                    candidate_attraction_count=candidate.candidate_attraction_count,
+                    baseline_fingerprint=baseline_route_fingerprint,
+                    candidate_fingerprint=candidate_route_fingerprint,
+                )
+            )
+            self._clear_content_refill_baseline(state)
+            state.plan_consistency_fingerprint = None
+            state.last_validation_result = None
+            self._record_local_content_action(
+                state,
+                AgentAction.REFILL_ATTRACTIONS,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        if count_attractions(state.trip_plan) >= required:
+            state.content_refill_status = "completed"
+            self._record_local_content_action(
+                state,
+                AgentAction.REFILL_ATTRACTIONS,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        max_attempts = state.execution_budget.max_content_refill_attempts
+        if state.content_refill_count >= max_attempts:
+            state.content_refill_status = "skipped"
+            state.content_refill_history.append(
+                ContentRefillRecord(
+                    attempt=state.content_refill_count,
+                    status="skipped",
+                    reason="Content refill attempt budget is exhausted",
+                    baseline_attraction_count=count_attractions(state.trip_plan),
+                    candidate_attraction_count=count_attractions(state.trip_plan),
+                    baseline_fingerprint=plan_route_fingerprint(
+                        state.request,
+                        state.trip_plan,
+                    ),
+                )
+            )
+            self._record_local_content_action(
+                state,
+                AgentAction.REFILL_ATTRACTIONS,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        if any(
+            item is None
+            for item in (
+                state.route_estimates,
+                state.route_quality_report,
+                state.schedule_quality_report,
+                state.constraint_report,
+            )
+        ):
+            raise ValueError("Current route, schedule and constraint reports are required")
+
+        candidate = self.content_refill_optimizer.optimize(
+            state.request,
+            state.trip_plan,
+            attractions=state.attractions,
+            excluded_candidate_identities=set(state.content_refill_excluded_identities),
+        )
+        if candidate is None:
+            state.content_refill_status = "skipped"
+            state.content_refill_history.append(
+                ContentRefillRecord(
+                    attempt=state.content_refill_count,
+                    status="skipped",
+                    reason="No nearby schedule-feasible unused Amap candidate was found",
+                    baseline_attraction_count=count_attractions(state.trip_plan),
+                    candidate_attraction_count=count_attractions(state.trip_plan),
+                    baseline_fingerprint=plan_route_fingerprint(
+                        state.request,
+                        state.trip_plan,
+                    ),
+                )
+            )
+            self._record_local_content_action(
+                state,
+                AgentAction.REFILL_ATTRACTIONS,
+                reason,
+                lifetime_attempt,
+            )
+            return
+
+        assert state.route_estimates is not None
+        assert state.route_quality_report is not None
+        assert state.schedule_quality_report is not None
+        assert state.constraint_report is not None
+        baseline_route_fingerprint = plan_route_fingerprint(
+            state.request,
+            state.trip_plan,
+        )
+        baseline_constraint_fingerprint = constraint_plan_fingerprint(
+            state.request,
+            state.trip_plan,
+        )
+        state.content_refill_baseline_plan = state.trip_plan.model_copy(deep=True)
+        state.content_refill_baseline_routes = deepcopy(state.route_estimates)
+        state.content_refill_baseline_route_quality = (
+            state.route_quality_report.model_copy(deep=True)
+        )
+        state.content_refill_baseline_schedule = (
+            state.schedule_quality_report.model_copy(deep=True)
+        )
+        state.content_refill_baseline_constraint_report = (
+            state.constraint_report.model_copy(deep=True)
+        )
+        state.content_refill_baseline_route_fingerprint = baseline_route_fingerprint
+        state.content_refill_baseline_constraint_fingerprint = (
+            baseline_constraint_fingerprint
+        )
+        state.content_refill_candidate = candidate.model_copy(deep=True)
+        state.trip_plan = candidate.plan.model_copy(deep=True)
+        self._clear_commute_analysis(state, reset_optimization_count=False)
+        state.content_refill_count += 1
+        state.content_refill_status = "candidate_pending"
+        state.route_estimates = None
+        state.route_plan_fingerprint = None
+        state.route_quality_report = None
+        state.route_quality_plan_fingerprint = None
+        state.schedule_quality_report = None
+        state.schedule_quality_plan_fingerprint = None
+        state.constraint_report = None
+        state.constraint_plan_fingerprint = None
+        state.plan_consistency_fingerprint = None
+        state.last_validation_result = None
+        self._record_local_content_action(
+            state,
+            AgentAction.REFILL_ATTRACTIONS,
+            reason,
+            lifetime_attempt,
+        )
+
+    def _rebuild_plan_content(
+        self,
+        state: AgentState,
+        reason: str,
+        lifetime_attempt: int,
+    ) -> None:
+        """根据已经稳定的最终行程重建全部描述和费用字段。"""
+
+        if state.trip_plan is None or state.route_estimates is None:
+            raise ValueError("Trip plan and route estimates are required for rebuilding")
+        before_route_fingerprint = plan_route_fingerprint(
+            state.request,
+            state.trip_plan,
+        )
+        rebuilt = self.plan_consistency_rebuilder.rebuild(
+            state.request,
+            state.trip_plan,
+            route_estimates=state.route_estimates,
+            schedule_quality_report=state.schedule_quality_report,
+        )
+        after_route_fingerprint = plan_route_fingerprint(state.request, rebuilt)
+        if after_route_fingerprint != before_route_fingerprint:
+            raise ValueError("Consistency rebuild unexpectedly changed route inputs")
+        state.trip_plan = rebuilt
+        state.plan_consistency_fingerprint = plan_content_source_fingerprint(
+            state.request,
+            rebuilt,
+            state.route_estimates,
+            state.schedule_quality_report,
+        )
+        state.plan_consistency_rebuild_count += 1
+        state.last_validation_result = None
+        self._record_local_content_action(
+            state,
+            AgentAction.REBUILD_PLAN_CONTENT,
             reason,
             lifetime_attempt,
         )
@@ -1497,6 +2533,10 @@ class TripOrchestrator:
                 "city": state.request.city,
                 "preferences": state.request.preferences,
             }
+        if action is AgentAction.SUPPLEMENT_ATTRACTIONS:
+            if state.commute_supplement_query is None:
+                raise ValueError("Commute supplement query is required")
+            return state.commute_supplement_query.model_dump(mode="json")
         if action is AgentAction.GET_WEATHER:
             return {"city": state.request.city}
         if action is AgentAction.SEARCH_HOTELS:
@@ -1547,6 +2587,45 @@ class TripOrchestrator:
             if not isinstance(result.data, dict):
                 raise ValueError("景点工具结果必须是对象")
             state.attractions = result.data
+            return
+        if action is AgentAction.SUPPLEMENT_ATTRACTIONS:
+            if state.commute_supplement_query is None:
+                raise ValueError("Commute supplement query is required")
+            nearby = NearbyAttractionSearchResult.model_validate(result.data)
+            query = state.commute_supplement_query
+            if (
+                nearby.radius_meters != query.radius_meters
+                or nearby.page != query.page
+                or nearby.center != query.center
+            ):
+                raise ValueError("Nearby candidates do not match the pending search query")
+            merged = self.commute_supplementer.merge(state.attractions, nearby)
+            state.attractions = merged.pool
+            state.commute_supplement_search_count += 1
+            status = "completed" if merged.added_candidates else "empty"
+            state.commute_supplement_history.append(
+                CommuteSupplementRecord(
+                    attempt=state.commute_supplement_search_count,
+                    status=status,
+                    reason=(
+                        "Nearby candidates merged into the Amap pool"
+                        if merged.added_candidates
+                        else "Nearby search returned no new usable candidates"
+                    ),
+                    target_attraction_name=query.target_attraction_name,
+                    day_index=query.day_index,
+                    attraction_index=query.attraction_index,
+                    anchor_names=query.anchor_names,
+                    center_longitude=query.center.longitude,
+                    center_latitude=query.center.latitude,
+                    radius_meters=query.radius_meters,
+                    received_candidates=merged.received_candidates,
+                    added_candidates=merged.added_candidates,
+                    final_candidates=merged.final_candidates,
+                )
+            )
+            state.commute_supplement_query = None
+            state.commute_optimization_status = "not_started"
             return
         if action is AgentAction.GET_WEATHER:
             if not isinstance(result.data, dict):
@@ -1625,7 +2704,7 @@ class TripOrchestrator:
         plan: TripPlan,
         trigger_action: AgentAction,
     ) -> TripPlan:
-        """Remove later duplicate POIs before any route queries are issued."""
+        """发起任何路线请求前，确定性移除后出现的重复 POI。"""
 
         normalized, removed = remove_duplicate_attractions(plan)
         if removed:

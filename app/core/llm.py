@@ -1,4 +1,4 @@
-"""Protocol-aware LLM clients for OpenAI Responses and Anthropic Messages."""
+"""支持 OpenAI Responses 与 Anthropic Messages 两种协议的 LLM 客户端。"""
 
 import json
 from typing import Any, Protocol
@@ -9,7 +9,7 @@ from app.core.config import settings
 
 
 class LLMOutputTruncatedError(RuntimeError):
-    """Raised when a provider stops because the output token limit was reached."""
+    """模型因为达到输出 Token 上限而提前停止时抛出。"""
 
 
 class LLMClient(Protocol):
@@ -19,7 +19,7 @@ class LLMClient(Protocol):
         input_text: str,
         response_model: type[Any] | None = None,
     ) -> str:
-        """Generate text from a system instruction and user input."""
+        """根据系统指令和用户输入生成文本结果。"""
 
 
 def _required(value: str | None, name: str) -> str:
@@ -40,7 +40,7 @@ def _normalize_protocol(protocol: str) -> str:
 
 
 def _anthropic_base_url(base_url: str) -> str:
-    """Return the prefix before /v1 because the SDK appends /v1/messages."""
+    """返回 /v1 之前的地址前缀，因为 SDK 会自动追加 /v1/messages。"""
     normalized = base_url.rstrip("/")
     if normalized.endswith("/v1"):
         return normalized[:-3]
@@ -48,7 +48,7 @@ def _anthropic_base_url(base_url: str) -> str:
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
-    """Read a field from either an SDK object or a gateway JSON dictionary."""
+    """统一读取 SDK 对象属性或网关 JSON 字典字段。"""
     if isinstance(value, dict):
         return value.get(name, default)
     return getattr(value, name, default)
@@ -68,11 +68,11 @@ def _as_content_blocks(content: Any) -> list[Any]:
 
 
 def _anthropic_text(response: Any) -> str | None:
-    """Extract final text from official and common Anthropic gateway shapes."""
+    """从官方及常见网关的 Anthropic 响应结构中提取最终文本。"""
     content = _field(response, "content")
     text_parts: list[str] = []
 
-    # Some relays simplify the Anthropic content array to a plain string.
+    # 某些中转服务会把 Anthropic content 数组简化为普通字符串。
     if isinstance(content, str):
         if content.strip():
             return content
@@ -88,11 +88,11 @@ def _anthropic_text(response: Any) -> str | None:
                 block_type.lower() if isinstance(block_type, str) else None
             )
 
-            # Thinking is internal reasoning and must not be treated as the answer.
+            # thinking 属于模型内部推理，不能当作最终答案返回。
             if normalized_type in {"thinking", "redacted_thinking"}:
                 continue
 
-            # Official blocks use type=text. A few compatible relays omit type.
+            # 官方文本块使用 type=text，少数兼容网关可能省略 type。
             if normalized_type in {None, "", "text", "output_text"}:
                 text = _text_value(block)
                 if text:
@@ -101,7 +101,7 @@ def _anthropic_text(response: Any) -> str | None:
     if text_parts:
         return "".join(text_parts)
 
-    # Compatibility fallbacks used by some API relays.
+    # 兼容部分中转服务使用的备用文本字段。
     for field_name in ("output_text", "completion"):
         value = _field(response, field_name)
         if isinstance(value, str) and value.strip():
@@ -111,7 +111,7 @@ def _anthropic_text(response: Any) -> str | None:
 
 
 def _anthropic_tool_call(response: Any) -> str | None:
-    """Normalize an Anthropic tool_use block to the app's JSON tool-call format."""
+    """把 Anthropic tool_use 块转换成项目统一的 JSON 工具调用格式。"""
     for block in _as_content_blocks(_field(response, "content")):
         block_type = _field(block, "type")
         if not isinstance(block_type, str) or block_type.lower() != "tool_use":
@@ -128,7 +128,7 @@ def _anthropic_tool_call(response: Any) -> str | None:
 
 
 def _anthropic_tool_continuation(response: Any) -> tuple[list[dict], list[dict]] | None:
-    """Build a safe tool_result continuation without executing model commands."""
+    """构造安全的 tool_result 续轮消息，但不会执行模型自行生成的命令。"""
     assistant_content: list[dict] = []
     tool_results: list[dict] = []
 
@@ -177,7 +177,7 @@ def _anthropic_tool_continuation(response: Any) -> tuple[list[dict], list[dict]]
 
 
 def _anthropic_response_diagnostics(response: Any) -> str:
-    """Return safe structural metadata without leaking generated content."""
+    """只返回安全的结构元数据，避免在异常中泄漏模型生成内容。"""
     content = _field(response, "content")
     blocks = _as_content_blocks(content)
     block_types: list[str] = []
@@ -208,7 +208,7 @@ def _anthropic_response_diagnostics(response: Any) -> str:
 
 
 class ResponsesLLM:
-    """OpenAI-compatible native Responses API client."""
+    """OpenAI 兼容的原生 Responses API 客户端。"""
 
     def __init__(
         self,
@@ -297,7 +297,7 @@ class ResponsesLLM:
 
 
 class AnthropicLLM:
-    """Anthropic-compatible native Messages API client."""
+    """Anthropic 兼容的原生 Messages API 客户端。"""
 
     def __init__(
         self,
@@ -339,10 +339,9 @@ class AnthropicLLM:
         response_model: type[Any] | None = None,
     ) -> str:
         if response_model is not None:
-            # Anthropic Messages has no native Pydantic response parser here.
-            # Keep the constraint compact: injecting the complete nested schema
-            # substantially increases context size and can make relays reject
-            # the request when combined with a large max_tokens value.
+            # 此处 Anthropic Messages 没有可直接使用的 Pydantic 响应解析器。
+            # 因此只注入精简结构约束；完整嵌套 Schema 会显著增大上下文，
+            # 再叠加较大的 max_tokens 时，部分中转网关可能直接拒绝请求。
             model_schema = response_model.model_json_schema()
             required_fields = model_schema.get("required", [])
             required_text = ", ".join(required_fields)
@@ -417,9 +416,8 @@ class AnthropicLLM:
             raise RuntimeError(
                 f"Anthropic context window was exceeded: {stop_reason}"
             )
-
-        # The search agents request a tool call. Claude may return a native
-        # tool_use block instead of the project's legacy [TOOL_CALL:...] text.
+        # 旧搜索 Agent 期望得到工具调用；Claude 可能返回原生 tool_use 块，
+        # 而不是项目早期使用的 [TOOL_CALL:...] 文本格式。
         if stop_reason == "tool_use":
             tool_call = _anthropic_tool_call(response)
             if tool_call:
@@ -452,7 +450,7 @@ _llm_clients: dict[str, LLMClient] = {}
 
 
 def get_llm(protocol: str | None = None) -> LLMClient:
-    """Return a reusable client for the selected protocol."""
+    """按所选协议返回可复用的 LLM 客户端。"""
     selected = _normalize_protocol(protocol or settings.LLM_PROTOCOL)
     # 同一协议复用客户端，避免每个 Agent 动作重复创建连接池。
     if selected not in _llm_clients:

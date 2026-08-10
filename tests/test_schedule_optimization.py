@@ -1,5 +1,6 @@
 import unittest
 
+from app.commute import CommuteConstraintEvaluator
 from app.agent_runtime import AgentAction, AgentState, TripOrchestrator
 from app.providers.amap.models import RouteEstimate, RouteEstimateResult
 from app.routing import evaluate_route_quality, plan_route_fingerprint
@@ -344,6 +345,9 @@ class ScheduleOrchestratorTests(unittest.TestCase):
         state.route_quality_report = evaluate_route_quality(plan, routes)
         state.route_quality_plan_fingerprint = routes.plan_fingerprint
         state.route_optimization_status = "skipped"
+        state.commute_report = CommuteConstraintEvaluator().evaluate(request, plan, routes)
+        state.commute_plan_fingerprint = routes.plan_fingerprint
+        state.commute_optimization_status = "skipped"
         state.schedule_quality_report = evaluator.evaluate(request, plan, routes)
         state.schedule_quality_plan_fingerprint = routes.plan_fingerprint
         return state
