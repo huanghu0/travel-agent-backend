@@ -5,6 +5,10 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Protocol
 
+from app.agent_runtime.acceptance import (
+    DEFAULT_ALLOWED_PARTIAL_ERROR_CODES,
+    PartialAcceptancePolicy,
+)
 from app.agent_runtime.convergence import (
     action_input_fingerprint,
     business_state_fingerprint,
@@ -190,6 +194,18 @@ class TripOrchestrator:
         max_repeated_action_inputs: int = 1,
         max_no_progress_steps: int = 3,
         max_local_actions_per_step: int = 8,
+        partial_acceptance_enabled: bool = True,
+        partial_acceptance_min_score: float = 70.0,
+        partial_acceptance_max_validation_errors: int = 2,
+        partial_acceptance_max_schedule_overtime_minutes: int = 60,
+        partial_acceptance_max_unavailable_route_legs: int = 0,
+        partial_acceptance_max_excessive_commute_segments: int = 0,
+        partial_acceptance_max_constraint_errors: int = 0,
+        partial_acceptance_min_attractions_per_day: int = 0,
+        partial_acceptance_allowed_error_codes: tuple[str, ...] = (
+            DEFAULT_ALLOWED_PARTIAL_ERROR_CODES
+        ),
+        partial_acceptance_policy: PartialAcceptancePolicy | None = None,
         max_duration_seconds: float = 180.0,
         max_tool_calls: int = 15,
         max_llm_calls: int = 6,
@@ -254,6 +270,18 @@ class TripOrchestrator:
             raise ValueError("max_no_progress_steps must be at least 1")
         if max_local_actions_per_step < 1:
             raise ValueError("max_local_actions_per_step must be at least 1")
+        if not 0 <= partial_acceptance_min_score <= 100:
+            raise ValueError("partial_acceptance_min_score must be between 0 and 100")
+        partial_limits = (
+            partial_acceptance_max_validation_errors,
+            partial_acceptance_max_schedule_overtime_minutes,
+            partial_acceptance_max_unavailable_route_legs,
+            partial_acceptance_max_excessive_commute_segments,
+            partial_acceptance_max_constraint_errors,
+            partial_acceptance_min_attractions_per_day,
+        )
+        if any(value < 0 for value in partial_limits):
+            raise ValueError("partial acceptance limits cannot be negative")
         if max_duration_seconds <= 0:
             raise ValueError("max_duration_seconds must be positive")
         if max_tool_calls < 0 or max_llm_calls < 0:
@@ -361,6 +389,32 @@ class TripOrchestrator:
         self.max_repeated_action_inputs = max_repeated_action_inputs
         self.max_no_progress_steps = max_no_progress_steps
         self.max_local_actions_per_step = max_local_actions_per_step
+        self.partial_acceptance_enabled = partial_acceptance_enabled
+        self.partial_acceptance_min_score = partial_acceptance_min_score
+        self.partial_acceptance_max_validation_errors = (
+            partial_acceptance_max_validation_errors
+        )
+        self.partial_acceptance_max_schedule_overtime_minutes = (
+            partial_acceptance_max_schedule_overtime_minutes
+        )
+        self.partial_acceptance_max_unavailable_route_legs = (
+            partial_acceptance_max_unavailable_route_legs
+        )
+        self.partial_acceptance_max_excessive_commute_segments = (
+            partial_acceptance_max_excessive_commute_segments
+        )
+        self.partial_acceptance_max_constraint_errors = (
+            partial_acceptance_max_constraint_errors
+        )
+        self.partial_acceptance_min_attractions_per_day = (
+            partial_acceptance_min_attractions_per_day
+        )
+        self.partial_acceptance_allowed_error_codes = list(
+            partial_acceptance_allowed_error_codes
+        )
+        self.partial_acceptance_policy = (
+            partial_acceptance_policy or PartialAcceptancePolicy()
+        )
         self.max_duration_seconds = max_duration_seconds
         self.max_tool_calls = max_tool_calls
         self.max_llm_calls = max_llm_calls
@@ -399,6 +453,29 @@ class TripOrchestrator:
             max_repeated_action_inputs=self.max_repeated_action_inputs,
             max_no_progress_steps=self.max_no_progress_steps,
             max_local_actions_per_step=self.max_local_actions_per_step,
+            partial_acceptance_enabled=self.partial_acceptance_enabled,
+            partial_acceptance_min_score=self.partial_acceptance_min_score,
+            partial_acceptance_max_validation_errors=(
+                self.partial_acceptance_max_validation_errors
+            ),
+            partial_acceptance_max_schedule_overtime_minutes=(
+                self.partial_acceptance_max_schedule_overtime_minutes
+            ),
+            partial_acceptance_max_unavailable_route_legs=(
+                self.partial_acceptance_max_unavailable_route_legs
+            ),
+            partial_acceptance_max_excessive_commute_segments=(
+                self.partial_acceptance_max_excessive_commute_segments
+            ),
+            partial_acceptance_max_constraint_errors=(
+                self.partial_acceptance_max_constraint_errors
+            ),
+            partial_acceptance_min_attractions_per_day=(
+                self.partial_acceptance_min_attractions_per_day
+            ),
+            partial_acceptance_allowed_error_codes=(
+                self.partial_acceptance_allowed_error_codes
+            ),
             max_duration_seconds=self.max_duration_seconds,
             max_tool_calls=self.max_tool_calls,
             max_llm_calls=self.max_llm_calls,
@@ -934,8 +1011,15 @@ class TripOrchestrator:
             )
         ):
             return AgentAction.VALIDATE_PLAN
-        # 校验通过后进入终态。
-        if state.last_validation_result.valid:
+        # 完整校验通过，或已达到部分可接受标准时，都可以进入终态。
+        # 后者会在 FINISH 中记录 partial 完成模式和未解决警告。
+        if (
+            state.last_validation_result.valid
+            or (
+                state.acceptance_report is not None
+                and state.acceptance_report.accepted
+            )
+        ):
             return AgentAction.FINISH
         # 仅当问题可修复且修复预算尚未耗尽时，才再次调用 LLM。
         if (
@@ -968,6 +1052,19 @@ class TripOrchestrator:
         if action is AgentAction.FINISH:
             state.finished = True
             state.status = "completed"
+            partial = bool(
+                state.acceptance_report is not None
+                and state.acceptance_report.accepted
+                and state.acceptance_report.partial
+            )
+            state.completion_mode = "partial" if partial else "full"
+            state.completion_warnings = (
+                list(state.acceptance_report.warnings)
+                if state.acceptance_report is not None
+                else []
+            )
+            if partial:
+                reason = "行程达到最低可接受标准，保留非关键问题后结束执行"
             state.action_history.append(
                 ActionRecord(
                     step=state.current_step,
@@ -1161,6 +1258,10 @@ class TripOrchestrator:
 
         for key in keys:
             state.evaluation_input_fingerprints.pop(key, None)
+        if "validation" in keys:
+            state.acceptance_report = None
+            state.completion_mode = None
+            state.completion_warnings = []
 
     @staticmethod
     def _clear_route_analysis(
@@ -2850,8 +2951,16 @@ class TripOrchestrator:
         )
         state.validation_history.append(result)
 
-        # 步骤 3：通过校验后，下一轮状态机会选择 FINISH。
-        if result.valid:
+        # 步骤 3：在每次确定性校验后执行交付分级。
+        # 即使完整校验未通过，只要核心结构、路线、时间轴和约束均满足阈值，
+        # 也可以保留非关键警告完成，避免继续进入无收益的 LLM 修复循环。
+        state.acceptance_report = self.partial_acceptance_policy.evaluate(
+            state,
+            result,
+        )
+
+        # 步骤 4：完整校验通过或部分策略接受后，下一轮状态机会选择 FINISH。
+        if result.valid or state.acceptance_report.accepted:
             state.action_history.append(
                 ActionRecord(
                     step=state.current_step,
@@ -2859,13 +2968,13 @@ class TripOrchestrator:
                     reason=reason,
                     attempt=lifetime_attempt,
                     success=True,
-                    validation_error_count=0,
+                    validation_error_count=result.error_count,
                     validation_warning_count=result.warning_count,
                 )
             )
             return
 
-        # 步骤 4：不通过时判断问题是否适合交给 LLM 修复，以及修复次数是否还有余额。
+        # 步骤 5：未达到交付标准时，再判断是否适合交给 LLM 修复。
         can_repair = result.repairable and state.repair_count < state.max_repair_attempts
         error = result.error_summary()
         state.errors.append(f"validate_plan: {error}")

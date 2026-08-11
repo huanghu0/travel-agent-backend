@@ -72,6 +72,51 @@ class Settings:
         _env("AGENT_MAX_REPAIR_ATTEMPTS", "2") or "2"
     )
 
+    # 部分可接受策略只容忍白名单内的非关键校验错误。
+    AGENT_PARTIAL_ACCEPTANCE_ENABLED: bool = _env_bool(
+        "AGENT_PARTIAL_ACCEPTANCE_ENABLED", True
+    )
+    AGENT_PARTIAL_ACCEPTANCE_MIN_SCORE: float = float(
+        _env("AGENT_PARTIAL_ACCEPTANCE_MIN_SCORE", "70") or "70"
+    )
+    AGENT_PARTIAL_ACCEPTANCE_MAX_VALIDATION_ERRORS: int = int(
+        _env("AGENT_PARTIAL_ACCEPTANCE_MAX_VALIDATION_ERRORS", "2") or "2"
+    )
+    AGENT_PARTIAL_ACCEPTANCE_MAX_SCHEDULE_OVERTIME_MINUTES: int = int(
+        _env(
+            "AGENT_PARTIAL_ACCEPTANCE_MAX_SCHEDULE_OVERTIME_MINUTES",
+            "60",
+        )
+        or "60"
+    )
+    AGENT_PARTIAL_ACCEPTANCE_MAX_UNAVAILABLE_ROUTE_LEGS: int = int(
+        _env("AGENT_PARTIAL_ACCEPTANCE_MAX_UNAVAILABLE_ROUTE_LEGS", "0") or "0"
+    )
+    AGENT_PARTIAL_ACCEPTANCE_MAX_EXCESSIVE_COMMUTE_SEGMENTS: int = int(
+        _env(
+            "AGENT_PARTIAL_ACCEPTANCE_MAX_EXCESSIVE_COMMUTE_SEGMENTS",
+            "0",
+        )
+        or "0"
+    )
+    AGENT_PARTIAL_ACCEPTANCE_MAX_CONSTRAINT_ERRORS: int = int(
+        _env("AGENT_PARTIAL_ACCEPTANCE_MAX_CONSTRAINT_ERRORS", "0") or "0"
+    )
+    AGENT_PARTIAL_ACCEPTANCE_MIN_ATTRACTIONS_PER_DAY: int = int(
+        _env("AGENT_PARTIAL_ACCEPTANCE_MIN_ATTRACTIONS_PER_DAY", "1") or "1"
+    )
+    AGENT_PARTIAL_ACCEPTANCE_ALLOWED_ERROR_CODES: tuple[str, ...] = tuple(
+        code.strip()
+        for code in (
+            _env(
+                "AGENT_PARTIAL_ACCEPTANCE_ALLOWED_ERROR_CODES",
+                "plan.empty_suggestions,schedule.daily_overtime",
+            )
+            or ""
+        ).split(",")
+        if code.strip()
+    )
+
     AGENT_MAX_ROUTE_OPTIMIZATION_ATTEMPTS: int = int(
         _env("AGENT_MAX_ROUTE_OPTIMIZATION_ATTEMPTS", "1") or "1"
     )

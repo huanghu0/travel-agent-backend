@@ -9,6 +9,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.agent_runtime.acceptance import (
+    DEFAULT_ALLOWED_PARTIAL_ERROR_CODES,
+    PartialAcceptanceReport,
+)
 from app.commute import (
     CommuteConstraintReport,
     CommuteReplacementCandidate,
@@ -27,7 +31,7 @@ from app.tools.models import ActionResult, ToolErrorType
 from app.validation import TripValidationResult
 
 
-CURRENT_AGENT_STATE_VERSION = 14
+CURRENT_AGENT_STATE_VERSION = 15
 
 
 def utc_now() -> datetime:
@@ -56,6 +60,18 @@ class ExecutionBudget(BaseModel):
     max_no_progress_steps: int = Field(default=3, ge=1)
     # 单个物理步骤最多吸收的确定性本地动作，防止压缩批次内部无限跳转。
     max_local_actions_per_step: int = Field(default=8, ge=1)
+    # 部分可接受结果策略：只允许非关键问题降级交付，核心路线与约束仍须满足。
+    partial_acceptance_enabled: bool = True
+    partial_acceptance_min_score: float = Field(default=70.0, ge=0.0, le=100.0)
+    partial_acceptance_max_validation_errors: int = Field(default=2, ge=0)
+    partial_acceptance_max_schedule_overtime_minutes: int = Field(default=60, ge=0)
+    partial_acceptance_max_unavailable_route_legs: int = Field(default=0, ge=0)
+    partial_acceptance_max_excessive_commute_segments: int = Field(default=0, ge=0)
+    partial_acceptance_max_constraint_errors: int = Field(default=0, ge=0)
+    partial_acceptance_min_attractions_per_day: int = Field(default=0, ge=0)
+    partial_acceptance_allowed_error_codes: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_ALLOWED_PARTIAL_ERROR_CODES)
+    )
 
 
 class AgentAction(str, Enum):
@@ -404,6 +420,10 @@ class AgentState(BaseModel):
     last_action_result: ActionResult | None = None
     last_validation_result: TripValidationResult | None = None
     validation_history: list[TripValidationResult] = Field(default_factory=list)
+    # 最终质量分级和降级原因会随 AgentState 持久化，供前端展示和后续复盘。
+    acceptance_report: PartialAcceptanceReport | None = None
+    completion_mode: Literal["full", "partial"] | None = None
+    completion_warnings: list[str] = Field(default_factory=list)
     plan_normalization_history: list[PlanNormalizationRecord] = Field(default_factory=list)
 
     # 执行循环收敛状态：完整评估输入、成功动作输入和无收益连续次数。
@@ -459,6 +479,15 @@ class AgentState(BaseModel):
         max_repeated_action_inputs: int = 1,
         max_no_progress_steps: int = 3,
         max_local_actions_per_step: int = 8,
+        partial_acceptance_enabled: bool = True,
+        partial_acceptance_min_score: float = 70.0,
+        partial_acceptance_max_validation_errors: int = 2,
+        partial_acceptance_max_schedule_overtime_minutes: int = 60,
+        partial_acceptance_max_unavailable_route_legs: int = 0,
+        partial_acceptance_max_excessive_commute_segments: int = 0,
+        partial_acceptance_max_constraint_errors: int = 0,
+        partial_acceptance_min_attractions_per_day: int = 0,
+        partial_acceptance_allowed_error_codes: list[str] | None = None,
         max_duration_seconds: float = 180.0,
         max_tool_calls: int = 15,
         max_llm_calls: int = 6,
@@ -482,6 +511,31 @@ class AgentState(BaseModel):
                 max_repeated_action_inputs=max_repeated_action_inputs,
                 max_no_progress_steps=max_no_progress_steps,
                 max_local_actions_per_step=max_local_actions_per_step,
+                partial_acceptance_enabled=partial_acceptance_enabled,
+                partial_acceptance_min_score=partial_acceptance_min_score,
+                partial_acceptance_max_validation_errors=(
+                    partial_acceptance_max_validation_errors
+                ),
+                partial_acceptance_max_schedule_overtime_minutes=(
+                    partial_acceptance_max_schedule_overtime_minutes
+                ),
+                partial_acceptance_max_unavailable_route_legs=(
+                    partial_acceptance_max_unavailable_route_legs
+                ),
+                partial_acceptance_max_excessive_commute_segments=(
+                    partial_acceptance_max_excessive_commute_segments
+                ),
+                partial_acceptance_max_constraint_errors=(
+                    partial_acceptance_max_constraint_errors
+                ),
+                partial_acceptance_min_attractions_per_day=(
+                    partial_acceptance_min_attractions_per_day
+                ),
+                partial_acceptance_allowed_error_codes=(
+                    partial_acceptance_allowed_error_codes
+                    if partial_acceptance_allowed_error_codes is not None
+                    else list(DEFAULT_ALLOWED_PARTIAL_ERROR_CODES)
+                ),
             )
         now = utc_now()
         values: dict[str, Any] = {

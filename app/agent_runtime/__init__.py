@@ -1,5 +1,10 @@
 """旅行规划智能体使用的确定性运行时基础组件。"""
 
+from app.agent_runtime.acceptance import (
+    PartialAcceptancePolicy,
+    PartialAcceptanceReport,
+    PlanQualityLevel,
+)
 from app.agent_runtime.exceptions import (
     AgentActionError,
     AgentBudgetExceededError,
@@ -60,6 +65,9 @@ __all__ = [
     "ConvergenceRecord",
     "ContentRefillStatus",
     "ExecutionBudget",
+    "PartialAcceptancePolicy",
+    "PartialAcceptanceReport",
+    "PlanQualityLevel",
     "PlanNormalizationRecord",
     "ExecutionPolicy",
     "RetryDecision",

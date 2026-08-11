@@ -8,6 +8,9 @@ from app.agent_runtime import (
     AgentState,
     AgentMaxStepsError,
     TripOrchestrator,
+    TripValidationResult,
+    ValidationIssue,
+    ValidationSeverity,
 )
 from app.constraints import ConstraintEvaluator, constraint_plan_fingerprint
 from app.plan_content import plan_content_source_fingerprint
@@ -131,6 +134,7 @@ def make_orchestrator(
     max_attempts_per_action=2,
     max_repair_attempts=2,
     max_local_actions_per_step=8,
+    validator=None,
 ):
     calls = []
     attraction = RecordingAttractionAgent(calls, attraction_responses)
@@ -146,6 +150,7 @@ def make_orchestrator(
         weather_agent=weather,
         hotel_agent=hotel,
         planner_agent=planner,
+        validator=validator,
         max_steps=max_steps,
         max_attempts_per_action=max_attempts_per_action,
         max_repair_attempts=max_repair_attempts,
@@ -153,6 +158,22 @@ def make_orchestrator(
     )
     return orchestrator, calls, planner
 
+class AllowlistedIssueValidator:
+    """模拟仅剩一个允许降级错误的确定性校验器。"""
+
+    def validate(self, request, plan, **kwargs):
+        return TripValidationResult.from_issues(
+            [
+                ValidationIssue(
+                    code="plan.empty_suggestions",
+                    severity=ValidationSeverity.ERROR,
+                    path="overall_suggestions",
+                    message="总体建议仍需补充",
+                    repair_hint="补充更详细的总体建议",
+                    repairable=True,
+                )
+            ]
+        )
 
 class TripOrchestratorTests(unittest.TestCase):
     def test_happy_path_runs_actions_in_deterministic_order(self):
@@ -208,6 +229,31 @@ class TripOrchestratorTests(unittest.TestCase):
         self.assertTrue(state.last_validation_result.valid)
         self.assertEqual(len(state.validation_history), 1)
 
+    def test_allowlisted_validation_error_finishes_partially_without_llm_repair(self):
+        """核心约束达标时应直接部分完成，不再调用 LLM 修复。"""
+
+        orchestrator, calls, planner = make_orchestrator(
+            validator=AllowlistedIssueValidator(),
+        )
+
+        state = orchestrator.run(make_request())
+
+        self.assertEqual(state.status, "completed")
+        self.assertEqual(state.completion_mode, "partial")
+        self.assertIsNotNone(state.acceptance_report)
+        self.assertTrue(state.acceptance_report.accepted)
+        self.assertTrue(state.acceptance_report.partial)
+        self.assertEqual(state.completion_warnings, ["总体建议仍需补充"])
+        self.assertNotIn(AgentAction.REPAIR_PLAN, [call[0] for call in calls])
+        self.assertIsNone(planner.repair_received)
+        validate_record = next(
+            record
+            for record in state.action_history
+            if record.action is AgentAction.VALIDATE_PLAN
+        )
+        self.assertTrue(validate_record.success)
+        self.assertEqual(validate_record.validation_error_count, 1)
+        self.assertEqual(state.action_history[-1].action, AgentAction.FINISH)
     def test_local_action_batch_limit_splits_long_pipeline_across_steps(self):
         orchestrator, _, _ = make_orchestrator(max_local_actions_per_step=2)
 
@@ -545,6 +591,36 @@ class TripOrchestratorTests(unittest.TestCase):
         self.assertEqual(response.data.city, "成都")
         self.assertEqual(response.session_id, state.session_id)
         self.assertEqual(response.execution_steps, state.current_step)
+        self.assertEqual(response.completion_mode, "full")
+        self.assertIn(response.quality_level, {"excellent", "acceptable"})
+        self.assertIsNotNone(response.quality_score)
+
+    def test_endpoint_returns_partial_quality_and_warnings(self):
+        """部分完成结果应通过稳定字段和消息明确告知前端。"""
+
+        import main
+
+        state = make_orchestrator(
+            validator=AllowlistedIssueValidator(),
+        )[0].run(make_request())
+
+        class CompletedOrchestrator:
+            def run(self, request):
+                return state
+
+        original = main.trip_orchestrator
+        main.trip_orchestrator = CompletedOrchestrator()
+        try:
+            response = asyncio.run(main.generate_trip_plan(make_request()))
+        finally:
+            main.trip_orchestrator = original
+
+        self.assertTrue(response.success)
+        self.assertEqual(response.completion_mode, "partial")
+        self.assertEqual(response.quality_level, "acceptable")
+        self.assertIsNotNone(response.quality_score)
+        self.assertEqual(response.warnings, ["总体建议仍需补充"])
+        self.assertIn("警告", response.message)
 
 
 if __name__ == "__main__":

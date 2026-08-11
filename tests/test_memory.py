@@ -149,6 +149,7 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         )
         self.assertEqual(recording_store.snapshots[0].status, "running")
         self.assertEqual(recording_store.snapshots[-1].status, "completed")
+
     def test_state_round_trip_preserves_history_and_timestamps(self):
         orchestrator, _ = make_orchestrator(self.store)
 
@@ -161,6 +162,12 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         self.assertEqual(loaded.action_history[-1].action, AgentAction.FINISH)
         self.assertIsNotNone(loaded.created_at.tzinfo)
         self.assertIsNotNone(loaded.updated_at.tzinfo)
+        self.assertEqual(loaded.completion_mode, "full")
+        self.assertIsNotNone(loaded.acceptance_report)
+        self.assertTrue(loaded.acceptance_report.accepted)
+        self.assertFalse(loaded.acceptance_report.partial)
+        self.assertEqual(loaded.completion_warnings, state.completion_warnings)
+        self.assertTrue(loaded.completion_warnings)
 
     def test_compressed_metadata_survives_sqlite_round_trip(self):
         orchestrator, _ = make_orchestrator(self.store)

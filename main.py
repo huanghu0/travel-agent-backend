@@ -65,6 +65,29 @@ trip_orchestrator = TripOrchestrator(
     max_no_progress_steps=settings.AGENT_MAX_NO_PROGRESS_STEPS,
     max_local_actions_per_step=settings.AGENT_MAX_LOCAL_ACTIONS_PER_STEP,
     max_repair_attempts=settings.AGENT_MAX_REPAIR_ATTEMPTS,
+    partial_acceptance_enabled=settings.AGENT_PARTIAL_ACCEPTANCE_ENABLED,
+    partial_acceptance_min_score=settings.AGENT_PARTIAL_ACCEPTANCE_MIN_SCORE,
+    partial_acceptance_max_validation_errors=(
+        settings.AGENT_PARTIAL_ACCEPTANCE_MAX_VALIDATION_ERRORS
+    ),
+    partial_acceptance_max_schedule_overtime_minutes=(
+        settings.AGENT_PARTIAL_ACCEPTANCE_MAX_SCHEDULE_OVERTIME_MINUTES
+    ),
+    partial_acceptance_max_unavailable_route_legs=(
+        settings.AGENT_PARTIAL_ACCEPTANCE_MAX_UNAVAILABLE_ROUTE_LEGS
+    ),
+    partial_acceptance_max_excessive_commute_segments=(
+        settings.AGENT_PARTIAL_ACCEPTANCE_MAX_EXCESSIVE_COMMUTE_SEGMENTS
+    ),
+    partial_acceptance_max_constraint_errors=(
+        settings.AGENT_PARTIAL_ACCEPTANCE_MAX_CONSTRAINT_ERRORS
+    ),
+    partial_acceptance_min_attractions_per_day=(
+        settings.AGENT_PARTIAL_ACCEPTANCE_MIN_ATTRACTIONS_PER_DAY
+    ),
+    partial_acceptance_allowed_error_codes=(
+        settings.AGENT_PARTIAL_ACCEPTANCE_ALLOWED_ERROR_CODES
+    ),
     max_route_optimization_attempts=(
         settings.AGENT_MAX_ROUTE_OPTIMIZATION_ATTEMPTS
     ),
@@ -222,10 +245,26 @@ async def generate_trip_plan(request: TripRequest):
         # 步骤 2：编排器完成后，把最终行程、会话 ID 和实际执行步数返回给前端。
         return TripPlanResponse(
             success=True,
-            message="旅行计划生成成功",
+            message=(
+                "旅行计划生成成功，部分非关键问题已保留为警告"
+                if state.completion_mode == "partial"
+                else "旅行计划生成成功"
+            ),
             data=state.trip_plan,
             session_id=state.session_id,
             execution_steps=state.current_step,
+            completion_mode=state.completion_mode,
+            quality_level=(
+                state.acceptance_report.quality_level.value
+                if state.acceptance_report is not None
+                else None
+            ),
+            quality_score=(
+                state.acceptance_report.quality_score
+                if state.acceptance_report is not None
+                else None
+            ),
+            warnings=state.completion_warnings,
         )
     # 步骤 3：把运行时异常转换成前端容易定位的 HTTP 错误。
     except AgentBudgetExceededError as exc:

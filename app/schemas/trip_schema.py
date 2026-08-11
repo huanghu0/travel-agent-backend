@@ -1,6 +1,6 @@
 """数据模型定义"""
 
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator
 from datetime import date
 
@@ -157,6 +157,19 @@ class TripPlanResponse(BaseModel):
     data: Optional[TripPlan] = Field(default=None, description="旅行计划数据")
     session_id: Optional[str] = Field(default=None, description="可查询和恢复的会话ID")
     execution_steps: Optional[int] = Field(default=None, description="已执行步骤数")
+    completion_mode: Optional[Literal["full", "partial"]] = Field(
+        default=None, description="完整校验完成或部分可接受完成"
+    )
+    quality_level: Optional[
+        Literal["excellent", "acceptable", "degraded", "unusable"]
+    ] = Field(default=None, description="最终行程质量等级")
+    quality_score: Optional[float] = Field(
+        default=None, ge=0, le=100, description="最终行程质量分数"
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="最终结果仍需向用户展示的未解决警告",
+    )
 
 
 class POIInfo(BaseModel):
@@ -205,4 +218,3 @@ class ErrorResponse(BaseModel):
     success: bool = Field(default=False, description="是否成功")
     message: str = Field(..., description="错误消息")
     error_code: Optional[str] = Field(default=None, description="错误代码")
-
