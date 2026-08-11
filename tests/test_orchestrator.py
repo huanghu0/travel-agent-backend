@@ -130,6 +130,7 @@ def make_orchestrator(
     max_steps=16,
     max_attempts_per_action=2,
     max_repair_attempts=2,
+    max_local_actions_per_step=8,
 ):
     calls = []
     attraction = RecordingAttractionAgent(calls, attraction_responses)
@@ -148,6 +149,7 @@ def make_orchestrator(
         max_steps=max_steps,
         max_attempts_per_action=max_attempts_per_action,
         max_repair_attempts=max_repair_attempts,
+        max_local_actions_per_step=max_local_actions_per_step,
     )
     return orchestrator, calls, planner
 
@@ -184,11 +186,77 @@ class TripOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(state.status, "completed")
         self.assertTrue(state.finished)
-        self.assertEqual(state.current_step, 10)
+        # 5 个外部/LLM 根动作之后，后续确定性动作被合并到第 5 个物理步骤。
+        self.assertEqual(state.current_step, 5)
+        self.assertEqual(state.local_action_batch_count, 1)
+        self.assertEqual(state.compressed_local_action_count, 5)
+        route_record = state.action_history[4]
+        self.assertEqual(
+            route_record.compressed_actions,
+            [
+                AgentAction.EVALUATE_COMMUTE,
+                AgentAction.REBUILD_PLAN_CONTENT,
+                AgentAction.EVALUATE_CONSTRAINTS,
+                AgentAction.VALIDATE_PLAN,
+                AgentAction.FINISH,
+            ],
+        )
+        self.assertTrue(all(record.step == 5 for record in state.action_history[5:]))
+        self.assertTrue(all(record.compressed for record in state.action_history[5:]))
         self.assertEqual(state.session_id, "session-test")
         self.assertEqual(state.trip_plan.city, "成都")
         self.assertTrue(state.last_validation_result.valid)
         self.assertEqual(len(state.validation_history), 1)
+
+    def test_local_action_batch_limit_splits_long_pipeline_across_steps(self):
+        orchestrator, _, _ = make_orchestrator(max_local_actions_per_step=2)
+
+        state = orchestrator.run(make_request())
+
+        self.assertEqual(state.current_step, 6)
+        self.assertEqual(state.local_action_batch_count, 2)
+        self.assertEqual(state.compressed_local_action_count, 4)
+        self.assertEqual(
+            state.action_history[4].compressed_actions,
+            [AgentAction.EVALUATE_COMMUTE, AgentAction.REBUILD_PLAN_CONTENT],
+        )
+        constraint_record = next(
+            record
+            for record in state.action_history
+            if record.action is AgentAction.EVALUATE_CONSTRAINTS
+        )
+        self.assertFalse(constraint_record.compressed)
+        self.assertEqual(
+            constraint_record.compressed_actions,
+            [AgentAction.VALIDATE_PLAN, AgentAction.FINISH],
+        )
+
+    def test_compressed_actions_preserve_convergence_records(self):
+        orchestrator, _, _ = make_orchestrator()
+
+        state = orchestrator.run(make_request())
+
+        successful_records = [record for record in state.action_history if record.success]
+        self.assertEqual(len(state.convergence_history), len(successful_records))
+        self.assertEqual(
+            [(item.step, item.action) for item in state.convergence_history],
+            [(item.step, item.action) for item in successful_records],
+        )
+        for action_record, convergence_record in zip(
+            successful_records, state.convergence_history
+        ):
+            self.assertEqual(
+                action_record.input_fingerprint, convergence_record.input_fingerprint
+            )
+            self.assertEqual(
+                action_record.state_fingerprint_before,
+                convergence_record.state_fingerprint_before,
+            )
+            self.assertEqual(
+                action_record.state_fingerprint_after,
+                convergence_record.state_fingerprint_after,
+            )
+            self.assertEqual(action_record.made_progress, convergence_record.made_progress)
 
     def test_route_fingerprint_controls_route_refresh_before_validation(self):
         state = AgentState.create(make_request())
@@ -324,6 +392,23 @@ class TripOrchestratorTests(unittest.TestCase):
         self.assertTrue(state.validation_history[1].valid)
         self.assertIsNotNone(planner.repair_received)
         self.assertEqual(state.status, "completed")
+        # 失败校验可以留在压缩批次中，但 LLM 修复必须退出批次并占用下一物理步骤。
+        failed_validation = next(
+            record
+            for record in state.action_history
+            if record.action is AgentAction.VALIDATE_PLAN and not record.success
+        )
+        repair_record = next(
+            record
+            for record in state.action_history
+            if record.action is AgentAction.REPAIR_PLAN
+        )
+        self.assertTrue(failed_validation.compressed)
+        self.assertEqual(
+            failed_validation.batch_root_action, AgentAction.ESTIMATE_ROUTES
+        )
+        self.assertFalse(repair_record.compressed)
+        self.assertGreater(repair_record.step, failed_validation.step)
 
     def test_repair_limit_stops_invalid_plan(self):
         orchestrator, calls, _ = make_orchestrator(
@@ -353,6 +438,13 @@ class TripOrchestratorTests(unittest.TestCase):
         self.assertEqual(caught.exception.action, AgentAction.VALIDATE_PLAN)
         self.assertEqual([call[0] for call in calls].count(AgentAction.REPAIR_PLAN), 0)
         self.assertFalse(caught.exception.state.last_validation_result.repairable)
+        failed_validation = caught.exception.state.action_history[-1]
+        self.assertEqual(failed_validation.action, AgentAction.VALIDATE_PLAN)
+        self.assertFalse(failed_validation.success)
+        self.assertTrue(failed_validation.compressed)
+        self.assertEqual(
+            failed_validation.batch_root_action, AgentAction.ESTIMATE_ROUTES
+        )
 
     def test_failed_tool_result_is_retried(self):
         orchestrator, calls, _ = make_orchestrator(

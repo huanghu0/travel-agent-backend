@@ -5,9 +5,19 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Protocol
 
+from app.agent_runtime.convergence import (
+    action_input_fingerprint,
+    business_state_fingerprint,
+    commute_input_fingerprint,
+    constraint_input_fingerprint,
+    route_quality_input_fingerprint,
+    schedule_input_fingerprint,
+    validation_input_fingerprint,
+)
 from app.agent_runtime.exceptions import (
     AgentActionError,
     AgentBudgetExceededError,
+    AgentConvergenceError,
     AgentMaxStepsError,
 )
 from app.agent_runtime.execution_policy import CircuitBreaker, ExecutionPolicy
@@ -19,6 +29,7 @@ from app.agent_runtime.state import (
     CommuteSupplementRecord,
     ConstraintOptimizationRecord,
     ContentRefillRecord,
+    ConvergenceRecord,
     PlanNormalizationRecord,
     RouteOptimizationRecord,
     ScheduleOptimizationRecord,
@@ -88,6 +99,38 @@ _ACTION_REASONS = {
 }
 
 
+# 只有不调用 HTTP/LLM 的确定性动作才能被吸收到同一物理步骤。
+# 每个逻辑动作仍保留 ActionRecord，不会丢失 SQLite 审计信息。
+_COMPRESSIBLE_LOCAL_ACTIONS = frozenset(
+    {
+        AgentAction.OPTIMIZE_ROUTES,
+        AgentAction.EVALUATE_COMMUTE,
+        AgentAction.REPLACE_REMOTE_ATTRACTION,
+        AgentAction.EVALUATE_SCHEDULE,
+        AgentAction.OPTIMIZE_SCHEDULE,
+        AgentAction.EVALUATE_CONSTRAINTS,
+        AgentAction.OPTIMIZE_CONSTRAINTS,
+        AgentAction.REFILL_ATTRACTIONS,
+        AgentAction.REBUILD_PLAN_CONTENT,
+        AgentAction.VALIDATE_PLAN,
+        AgentAction.FINISH,
+    }
+)
+
+
+def _evaluation_is_current(
+    state: AgentState,
+    key: str,
+    input_fingerprint: str,
+    legacy_matches: bool,
+) -> bool:
+    """优先校验 v13 完整输入指纹，旧检查点才回退到原行程指纹。"""
+
+    if key in state.evaluation_input_fingerprints:
+        return state.evaluation_input_fingerprints[key] == input_fingerprint
+    return legacy_matches
+
+
 class TripOrchestrator:
     """旅行规划总编排器：负责决策顺序，ExecutionPolicy 负责安全执行。"""
 
@@ -144,6 +187,9 @@ class TripOrchestrator:
         content_refill_default_visit_duration_minutes: int = 120,
         content_refill_optimizer: MinimumAttractionRefillOptimizer | None = None,
         plan_consistency_rebuilder: TripPlanConsistencyRebuilder | None = None,
+        max_repeated_action_inputs: int = 1,
+        max_no_progress_steps: int = 3,
+        max_local_actions_per_step: int = 8,
         max_duration_seconds: float = 180.0,
         max_tool_calls: int = 15,
         max_llm_calls: int = 6,
@@ -202,6 +248,12 @@ class TripOrchestrator:
             raise ValueError(
                 "content_refill_default_visit_duration_minutes must be at least 1"
             )
+        if max_repeated_action_inputs < 1:
+            raise ValueError("max_repeated_action_inputs must be at least 1")
+        if max_no_progress_steps < 1:
+            raise ValueError("max_no_progress_steps must be at least 1")
+        if max_local_actions_per_step < 1:
+            raise ValueError("max_local_actions_per_step must be at least 1")
         if max_duration_seconds <= 0:
             raise ValueError("max_duration_seconds must be positive")
         if max_tool_calls < 0 or max_llm_calls < 0:
@@ -306,6 +358,9 @@ class TripOrchestrator:
         self.plan_consistency_rebuilder = (
             plan_consistency_rebuilder or TripPlanConsistencyRebuilder()
         )
+        self.max_repeated_action_inputs = max_repeated_action_inputs
+        self.max_no_progress_steps = max_no_progress_steps
+        self.max_local_actions_per_step = max_local_actions_per_step
         self.max_duration_seconds = max_duration_seconds
         self.max_tool_calls = max_tool_calls
         self.max_llm_calls = max_llm_calls
@@ -341,6 +396,9 @@ class TripOrchestrator:
             max_commute_supplement_searches=self.max_commute_supplement_searches,
             max_content_refill_attempts=self.max_content_refill_attempts,
             minimum_total_attractions=self.minimum_total_attractions,
+            max_repeated_action_inputs=self.max_repeated_action_inputs,
+            max_no_progress_steps=self.max_no_progress_steps,
+            max_local_actions_per_step=self.max_local_actions_per_step,
             max_duration_seconds=self.max_duration_seconds,
             max_tool_calls=self.max_tool_calls,
             max_llm_calls=self.max_llm_calls,
@@ -365,29 +423,48 @@ class TripOrchestrator:
         # 这里只统计“本次 run/resume”的尝试次数，终身次数保存在 AgentState 中。
         attempts_in_run: dict[str, int] = {}
 
-        # 步骤 2：在完成或达到最大步数前持续执行“检查预算 → 决策 → 执行 → 持久化”。
+        # 步骤 2：每轮执行一个物理动作，再尽可能吸收后续本地状态跳转。
         while not state.finished and state.current_step < state.max_steps:
-            # 2.1 每轮先检查总执行时长，超时后禁止继续调用工具。
             runtime_reason = self.execution_policy.runtime_budget_reason(state)
             if runtime_reason:
                 self._raise_budget_exhausted(state, runtime_reason)
 
-            # 2.2 只根据当前状态选择下一动作，不让 LLM 决定流程。
             action = self.decide_next_action(state)
+            input_fingerprint, success_key = self._prepare_convergence_action(
+                state, action
+            )
+            state_fingerprint_before = business_state_fingerprint(state)
+            history_length = len(state.action_history)
             key = action.value
             attempts_in_run[key] = attempts_in_run.get(key, 0) + 1
             try:
-                # 2.3 执行一个原子动作；失败时由执行策略判断是否可以重试。
                 self.execute_action(
                     state,
                     action,
                     attempt_in_run=attempts_in_run[key],
                 )
+                successful_record = self._find_successful_action_record(
+                    state, action, history_length
+                )
+                if successful_record is not None:
+                    self._record_convergence_result(
+                        state,
+                        action=action,
+                        input_fingerprint=input_fingerprint,
+                        success_key=success_key,
+                        state_fingerprint_before=state_fingerprint_before,
+                        action_record=successful_record,
+                    )
+                    self._drain_local_actions(
+                        state,
+                        batch_root_action=action,
+                        root_record=successful_record,
+                    )
             finally:
-                # 2.4 无论成功还是异常都保存检查点，保证任务可以复盘和恢复。
+                # 一个物理步骤只写入一次常规检查点；子动作已全部进入 action_history。
                 self._checkpoint(state)
 
-        # 步骤 3：达到最大步数仍未结束时，明确失败，防止无限循环。
+        # 步骤 3：达到最大物理步数仍未结束时，明确失败。
         if not state.finished:
             state.status = "max_steps_reached"
             state.budget_exhausted_reason = (
@@ -399,6 +476,167 @@ class TripOrchestrator:
             raise AgentMaxStepsError(message, state)
 
         return state
+
+    def _prepare_convergence_action(
+        self, state: AgentState, action: AgentAction
+    ) -> tuple[str, str]:
+        """生成动作输入指纹，并在真正执行前拦截重复成功动作。"""
+
+        input_fingerprint = action_input_fingerprint(state, action)
+        success_key = f"{action.value}:{input_fingerprint}"
+        successful_count = state.successful_action_inputs.get(success_key, 0)
+        if successful_count >= state.execution_budget.max_repeated_action_inputs:
+            self._raise_convergence_stopped(
+                state,
+                f"动作 {action.value} 在相同业务输入下已成功执行 "
+                f"{successful_count} 次，拒绝重复执行",
+            )
+        return input_fingerprint, success_key
+
+    @staticmethod
+    def _find_successful_action_record(
+        state: AgentState,
+        action: AgentAction,
+        history_length: int,
+    ) -> ActionRecord | None:
+        """从本次动作新增的审计记录中找到成功项。"""
+
+        return next(
+            (
+                record
+                for record in reversed(state.action_history[history_length:])
+                if record.action is action and record.success
+            ),
+            None,
+        )
+
+    def _drain_local_actions(
+        self,
+        state: AgentState,
+        *,
+        batch_root_action: AgentAction,
+        root_record: ActionRecord,
+    ) -> None:
+        """在当前物理步骤内连续执行可安全压缩的确定性本地动作。"""
+
+        # 自定义编排器如果重写 execute_action，默认保留其原有的一步一动作语义。
+        if type(self).execute_action is not TripOrchestrator.execute_action:
+            return
+
+        batch_started = False
+        for batch_index in range(1, state.execution_budget.max_local_actions_per_step + 1):
+            if state.finished:
+                break
+            runtime_reason = self.execution_policy.runtime_budget_reason(state)
+            if runtime_reason:
+                self._raise_budget_exhausted(state, runtime_reason)
+
+            action = self.decide_next_action(state)
+            if action not in _COMPRESSIBLE_LOCAL_ACTIONS:
+                break
+
+            if not batch_started:
+                state.local_action_batch_count += 1
+                batch_started = True
+
+            input_fingerprint, success_key = self._prepare_convergence_action(
+                state, action
+            )
+            state_fingerprint_before = business_state_fingerprint(state)
+            history_length = len(state.action_history)
+            try:
+                self.execute_action(state, action, advance_step=False)
+            finally:
+                # 即使本地动作以异常结束，也要给已经写入的失败记录补齐批次元数据。
+                new_records = state.action_history[history_length:]
+                for record in new_records:
+                    record.compressed = True
+                    record.batch_root_action = batch_root_action
+                    record.batch_index = batch_index
+                if new_records:
+                    root_record.compressed_actions.append(action)
+                    state.compressed_local_action_count += 1
+
+            successful_record = self._find_successful_action_record(
+                state, action, history_length
+            )
+            if successful_record is None:
+                # 例如最终校验失败时，立即把控制权交回外层以决定是否调用 LLM 修复。
+                break
+
+            self._record_convergence_result(
+                state,
+                action=action,
+                input_fingerprint=input_fingerprint,
+                success_key=success_key,
+                state_fingerprint_before=state_fingerprint_before,
+                action_record=successful_record,
+            )
+
+    def _record_convergence_result(
+        self,
+        state: AgentState,
+        *,
+        action: AgentAction,
+        input_fingerprint: str,
+        success_key: str,
+        state_fingerprint_before: str,
+        action_record: ActionRecord,
+    ) -> None:
+        """成功动作完成后保存业务进展证据。"""
+
+        state_fingerprint_after = business_state_fingerprint(state)
+        made_progress = state_fingerprint_before != state_fingerprint_after
+        action_record.input_fingerprint = input_fingerprint
+        action_record.state_fingerprint_before = state_fingerprint_before
+        action_record.state_fingerprint_after = state_fingerprint_after
+        action_record.made_progress = made_progress
+        if made_progress:
+            # 业务状态发生变化后开启新的收敛窗口，只保留
+            # 产生新状态的当前动作，使后续回滚或恢复
+            # 可以合法地再次执行曾经出现过的输入。
+            state.successful_action_inputs.clear()
+            state.successful_action_inputs[success_key] = 1
+        else:
+            state.successful_action_inputs[success_key] = (
+                state.successful_action_inputs.get(success_key, 0) + 1
+            )
+        state.convergence_history.append(
+            ConvergenceRecord(
+                step=state.current_step,
+                action=action,
+                input_fingerprint=input_fingerprint,
+                state_fingerprint_before=state_fingerprint_before,
+                state_fingerprint_after=state_fingerprint_after,
+                made_progress=made_progress,
+                reason=(
+                    "业务状态已变化"
+                    if made_progress
+                    else "业务状态未变化"
+                ),
+            )
+        )
+        if made_progress:
+            state.no_progress_streak = 0
+            return
+
+        state.no_progress_streak += 1
+        state.no_progress_total += 1
+        if state.no_progress_streak >= state.execution_budget.max_no_progress_steps:
+            self._raise_convergence_stopped(
+                state,
+                f"连续 {state.no_progress_streak} 个成功动作未改变业务状态",
+            )
+
+    def _raise_convergence_stopped(self, state: AgentState, reason: str) -> None:
+        """持久化收敛终止状态，并停止浪费后续执行预算。"""
+
+        state.status = "convergence_stopped"
+        state.convergence_terminated_reason = reason
+        if reason not in state.errors:
+            state.errors.append(reason)
+        self._checkpoint(state)
+        raise AgentConvergenceError(reason, state)
 
     @staticmethod
     def decide_next_action(state: AgentState) -> AgentAction:
@@ -415,6 +653,15 @@ class TripOrchestrator:
         if state.trip_plan is None:
             return AgentAction.GENERATE_PLAN
         current_route_fingerprint = plan_route_fingerprint(state.request, state.trip_plan)
+        route_quality_fingerprint = route_quality_input_fingerprint(
+            state.request, state.trip_plan, state.route_estimates
+        )
+        schedule_fingerprint = schedule_input_fingerprint(
+            state.request, state.trip_plan, state.route_estimates
+        )
+        commute_fingerprint = commute_input_fingerprint(
+            state.request, state.trip_plan, state.route_estimates
+        )
         if (
             state.route_estimates is None
             or state.route_plan_fingerprint != current_route_fingerprint
@@ -425,7 +672,12 @@ class TripOrchestrator:
         # 该步骤也用于自动补齐旧版 SQLite 检查点缺失的路线评分。
         if (
             state.route_quality_report is None
-            or state.route_quality_plan_fingerprint != current_route_fingerprint
+            or not _evaluation_is_current(
+                state,
+                "route_quality",
+                route_quality_fingerprint,
+                state.route_quality_plan_fingerprint == current_route_fingerprint,
+            )
         ):
             return AgentAction.OPTIMIZE_ROUTES
 
@@ -444,7 +696,12 @@ class TripOrchestrator:
         # 再开始通勤替换，避免不同优化器的回滚基线发生嵌套。
         schedule_current = (
             state.schedule_quality_report is not None
-            and state.schedule_quality_plan_fingerprint == current_route_fingerprint
+            and _evaluation_is_current(
+                state,
+                "schedule",
+                schedule_fingerprint,
+                state.schedule_quality_plan_fingerprint == current_route_fingerprint,
+            )
         )
         if state.schedule_optimization_status == "candidate_pending":
             return (
@@ -459,9 +716,21 @@ class TripOrchestrator:
                 state.request,
                 state.trip_plan,
             )
+            current_constraint_input = constraint_input_fingerprint(
+                state.request,
+                state.trip_plan,
+                state.schedule_quality_report,
+                state.attractions,
+                state.weather,
+            )
             if (
                 state.constraint_report is None
-                or state.constraint_plan_fingerprint != current_constraint_fingerprint
+                or not _evaluation_is_current(
+                    state,
+                    "constraints",
+                    current_constraint_input,
+                    state.constraint_plan_fingerprint == current_constraint_fingerprint,
+                )
             ):
                 return AgentAction.EVALUATE_CONSTRAINTS
             return AgentAction.OPTIMIZE_CONSTRAINTS
@@ -472,9 +741,21 @@ class TripOrchestrator:
                 state.request,
                 state.trip_plan,
             )
+            current_constraint_input = constraint_input_fingerprint(
+                state.request,
+                state.trip_plan,
+                state.schedule_quality_report,
+                state.attractions,
+                state.weather,
+            )
             if (
                 state.constraint_report is None
-                or state.constraint_plan_fingerprint != current_constraint_fingerprint
+                or not _evaluation_is_current(
+                    state,
+                    "constraints",
+                    current_constraint_input,
+                    state.constraint_plan_fingerprint == current_constraint_fingerprint,
+                )
             ):
                 return AgentAction.EVALUATE_CONSTRAINTS
             return AgentAction.REFILL_ATTRACTIONS
@@ -483,7 +764,12 @@ class TripOrchestrator:
         # 单段通勤上限，保留问题根因。
         if (
             state.commute_report is None
-            or state.commute_plan_fingerprint != current_route_fingerprint
+            or not _evaluation_is_current(
+                state,
+                "commute",
+                commute_fingerprint,
+                state.commute_plan_fingerprint == current_route_fingerprint,
+            )
         ):
             return AgentAction.EVALUATE_COMMUTE
 
@@ -510,9 +796,21 @@ class TripOrchestrator:
                 state.request,
                 state.trip_plan,
             )
+            current_constraint_input = constraint_input_fingerprint(
+                state.request,
+                state.trip_plan,
+                state.schedule_quality_report,
+                state.attractions,
+                state.weather,
+            )
             if (
                 state.constraint_report is None
-                or state.constraint_plan_fingerprint != current_constraint_fingerprint
+                or not _evaluation_is_current(
+                    state,
+                    "constraints",
+                    current_constraint_input,
+                    state.constraint_plan_fingerprint == current_constraint_fingerprint,
+                )
             ):
                 return AgentAction.EVALUATE_CONSTRAINTS
             return AgentAction.REPLACE_REMOTE_ATTRACTION
@@ -548,9 +846,21 @@ class TripOrchestrator:
             state.request,
             state.trip_plan,
         )
+        current_constraint_input = constraint_input_fingerprint(
+            state.request,
+            state.trip_plan,
+            state.schedule_quality_report,
+            state.attractions,
+            state.weather,
+        )
         constraints_current = (
             state.constraint_report is not None
-            and state.constraint_plan_fingerprint == current_constraint_fingerprint
+            and _evaluation_is_current(
+                state,
+                "constraints",
+                current_constraint_input,
+                state.constraint_plan_fingerprint == current_constraint_fingerprint,
+            )
         )
         if constraints_required_for_refill:
             if not constraints_current:
@@ -579,9 +889,21 @@ class TripOrchestrator:
             state.request,
             state.trip_plan,
         )
+        current_constraint_input = constraint_input_fingerprint(
+            state.request,
+            state.trip_plan,
+            state.schedule_quality_report,
+            state.attractions,
+            state.weather,
+        )
         if (
             state.constraint_report is None
-            or state.constraint_plan_fingerprint != current_constraint_fingerprint
+            or not _evaluation_is_current(
+                state,
+                "constraints",
+                current_constraint_input,
+                state.constraint_plan_fingerprint == current_constraint_fingerprint,
+            )
         ):
             return AgentAction.EVALUATE_CONSTRAINTS
         if state.constraint_optimization_status == "candidate_pending":
@@ -592,7 +914,25 @@ class TripOrchestrator:
         ):
             return AgentAction.OPTIMIZE_CONSTRAINTS
 
-        if state.last_validation_result is None:
+        current_validation_input = validation_input_fingerprint(
+            state.request,
+            state.trip_plan,
+            state.attractions,
+            state.weather,
+            state.hotels,
+            state.route_estimates,
+            state.schedule_quality_report,
+            state.constraint_report,
+        )
+        if (
+            state.last_validation_result is None
+            or not _evaluation_is_current(
+                state,
+                "validation",
+                current_validation_input,
+                state.last_validation_result is not None,
+            )
+        ):
             return AgentAction.VALIDATE_PLAN
         # 校验通过后进入终态。
         if state.last_validation_result.valid:
@@ -611,11 +951,15 @@ class TripOrchestrator:
         action: AgentAction,
         *,
         attempt_in_run: int | None = None,
+        advance_step: bool = True,
     ) -> None:
-        """执行一个动作，并记录实际发生的每一次工具调用尝试。"""
+        """执行一个动作；压缩子动作可共用当前物理步骤。"""
 
-        # 步骤 1：先递增步骤和动作尝试次数，确保日志能反映真实物理调用。
-        state.current_step += 1
+        # 只有物理根动作递增 current_step，被压缩的本地子动作共用步骤号。
+        if advance_step:
+            state.current_step += 1
+        elif state.current_step < 1:
+            raise ValueError("compressed action requires an active physical step")
         lifetime_attempt = state.next_attempt(action)
         current_run_attempt = attempt_in_run or lifetime_attempt
         reason = _ACTION_REASONS[action]
@@ -802,7 +1146,21 @@ class TripOrchestrator:
         report = evaluate_route_quality(state.trip_plan, route_result)
         state.route_quality_report = report
         state.route_quality_plan_fingerprint = current_fingerprint
+        state.evaluation_input_fingerprints["route_quality"] = (
+            route_quality_input_fingerprint(
+                state.request, state.trip_plan, state.route_estimates
+            )
+        )
         return report
+
+    @staticmethod
+    def _invalidate_evaluation_fingerprints(
+        state: AgentState, *keys: str
+    ) -> None:
+        """派生评估的业务输入改变后，清理对应的输入指纹。"""
+
+        for key in keys:
+            state.evaluation_input_fingerprints.pop(key, None)
 
     @staticmethod
     def _clear_route_analysis(
@@ -812,6 +1170,14 @@ class TripOrchestrator:
     ) -> None:
         """行程结构变化后清理所有由旧路线派生的数据。"""
 
+        TripOrchestrator._invalidate_evaluation_fingerprints(
+            state,
+            "route_quality",
+            "commute",
+            "schedule",
+            "constraints",
+            "validation",
+        )
         state.route_estimates = None
         state.route_plan_fingerprint = None
         state.route_quality_report = None
@@ -853,6 +1219,9 @@ class TripOrchestrator:
     ) -> None:
         """清理所有由旧可执行性约束派生的报告和优化基线。"""
 
+        TripOrchestrator._invalidate_evaluation_fingerprints(
+            state, "constraints", "validation"
+        )
         state.constraint_report = None
         state.constraint_plan_fingerprint = None
         state.constraint_optimization_status = "not_started"
@@ -948,6 +1317,11 @@ class TripOrchestrator:
                 state.route_plan_fingerprint = baseline_fingerprint
                 state.route_quality_report = baseline_quality.model_copy(deep=True)
                 state.route_quality_plan_fingerprint = baseline_fingerprint
+                state.evaluation_input_fingerprints["route_quality"] = (
+                    route_quality_input_fingerprint(
+                        state.request, state.trip_plan, state.route_estimates
+                    )
+                )
                 state.schedule_optimization_status = "not_started"
                 self._refresh_schedule_quality(state)
 
@@ -1061,6 +1435,9 @@ class TripOrchestrator:
         previous_fingerprint = state.commute_plan_fingerprint
         state.commute_report = report
         state.commute_plan_fingerprint = current_fingerprint
+        state.evaluation_input_fingerprints["commute"] = commute_input_fingerprint(
+            state.request, state.trip_plan, state.route_estimates
+        )
         if (
             report.optimization_recommended
             and previous_fingerprint != current_fingerprint
@@ -1092,6 +1469,9 @@ class TripOrchestrator:
         *,
         reset_optimization_count: bool,
     ) -> None:
+        TripOrchestrator._invalidate_evaluation_fingerprints(
+            state, "commute", "validation"
+        )
         state.commute_report = None
         state.commute_plan_fingerprint = None
         state.commute_optimization_status = "not_started"
@@ -1520,6 +1900,9 @@ class TripOrchestrator:
         )
         state.schedule_quality_report = report
         state.schedule_quality_plan_fingerprint = current_fingerprint
+        state.evaluation_input_fingerprints["schedule"] = schedule_input_fingerprint(
+            state.request, state.trip_plan, state.route_estimates
+        )
         if (
             state.schedule_optimization_status == "not_started"
             and not report.optimization_recommended
@@ -1810,6 +2193,15 @@ class TripOrchestrator:
             raise ValueError("Constraint report does not match the current trip plan")
         state.constraint_report = report
         state.constraint_plan_fingerprint = current_fingerprint
+        state.evaluation_input_fingerprints["constraints"] = (
+            constraint_input_fingerprint(
+                state.request,
+                state.trip_plan,
+                state.schedule_quality_report,
+                state.attractions,
+                state.weather,
+            )
+        )
         if (
             state.constraint_optimization_status == "not_started"
             and not report.optimization_recommended
@@ -2444,6 +2836,18 @@ class TripOrchestrator:
         )
         # 步骤 2：保存最新结果，同时追加历史记录，便于比较每次修复效果。
         state.last_validation_result = result
+        state.evaluation_input_fingerprints["validation"] = (
+            validation_input_fingerprint(
+                state.request,
+                state.trip_plan,
+                state.attractions,
+                state.weather,
+                state.hotels,
+                state.route_estimates,
+                state.schedule_quality_report,
+                state.constraint_report,
+            )
+        )
         state.validation_history.append(result)
 
         # 步骤 3：通过校验后，下一轮状态机会选择 FINISH。
@@ -2601,6 +3005,9 @@ class TripOrchestrator:
                 raise ValueError("Nearby candidates do not match the pending search query")
             merged = self.commute_supplementer.merge(state.attractions, nearby)
             state.attractions = merged.pool
+            self._invalidate_evaluation_fingerprints(
+                state, "constraints", "validation"
+            )
             state.commute_supplement_search_count += 1
             status = "completed" if merged.added_candidates else "empty"
             state.commute_supplement_history.append(
@@ -2657,11 +3064,19 @@ class TripOrchestrator:
                 raise ValueError("Route estimates do not match the current trip plan")
             state.route_estimates = route_result.model_dump(mode="json")
             state.route_plan_fingerprint = route_result.plan_fingerprint
+            self._invalidate_evaluation_fingerprints(
+                state, "commute", "constraints", "validation"
+            )
             state.route_quality_report = evaluate_route_quality(
                 state.trip_plan,
                 route_result,
             )
             state.route_quality_plan_fingerprint = route_result.plan_fingerprint
+            state.evaluation_input_fingerprints["route_quality"] = (
+                route_quality_input_fingerprint(
+                    state.request, state.trip_plan, state.route_estimates
+                )
+            )
             if (
                 state.route_optimization_status == "not_started"
                 and (
@@ -2677,6 +3092,11 @@ class TripOrchestrator:
                 route_result,
             )
             state.schedule_quality_plan_fingerprint = route_result.plan_fingerprint
+            state.evaluation_input_fingerprints["schedule"] = (
+                schedule_input_fingerprint(
+                    state.request, state.trip_plan, state.route_estimates
+                )
+            )
             if (
                 state.schedule_optimization_status == "not_started"
                 and not state.schedule_quality_report.optimization_recommended

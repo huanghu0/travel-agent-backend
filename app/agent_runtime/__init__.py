@@ -3,6 +3,7 @@
 from app.agent_runtime.exceptions import (
     AgentActionError,
     AgentBudgetExceededError,
+    AgentConvergenceError,
     AgentMaxStepsError,
     AgentRuntimeError,
 )
@@ -23,6 +24,7 @@ from app.agent_runtime.state import (
     CommuteSupplementRecord,
     ConstraintOptimizationRecord,
     ContentRefillRecord,
+    ConvergenceRecord,
     ContentRefillStatus,
     ExecutionBudget,
     PlanNormalizationRecord,
@@ -43,6 +45,7 @@ __all__ = [
     "AgentAction",
     "AgentActionError",
     "AgentBudgetExceededError",
+    "AgentConvergenceError",
     "AgentMaxStepsError",
     "AgentRuntimeError",
     "AgentState",
@@ -54,6 +57,7 @@ __all__ = [
     "CommuteSupplementRecord",
     "ConstraintOptimizationRecord",
     "ContentRefillRecord",
+    "ConvergenceRecord",
     "ContentRefillStatus",
     "ExecutionBudget",
     "PlanNormalizationRecord",

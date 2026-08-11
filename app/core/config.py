@@ -59,6 +59,15 @@ class Settings:
     AGENT_MAX_ATTEMPTS_PER_ACTION: int = int(
         _env("AGENT_MAX_ATTEMPTS_PER_ACTION", "2") or "2"
     )
+    AGENT_MAX_REPEATED_ACTION_INPUTS: int = int(
+        _env("AGENT_MAX_REPEATED_ACTION_INPUTS", "1") or "1"
+    )
+    AGENT_MAX_NO_PROGRESS_STEPS: int = int(
+        _env("AGENT_MAX_NO_PROGRESS_STEPS", "3") or "3"
+    )
+    AGENT_MAX_LOCAL_ACTIONS_PER_STEP: int = int(
+        _env("AGENT_MAX_LOCAL_ACTIONS_PER_STEP", "8") or "8"
+    )
     AGENT_MAX_REPAIR_ATTEMPTS: int = int(
         _env("AGENT_MAX_REPAIR_ATTEMPTS", "2") or "2"
     )

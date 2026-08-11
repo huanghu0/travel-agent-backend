@@ -140,9 +140,12 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
 
         state = orchestrator.run(make_request(), session_id="checkpoint-session")
 
+        # 压缩后仍是“初始状态 + 每个物理步骤”一个检查点，
+        # 但最后一个检查点会同时包含多个本地逻辑动作。
+        self.assertEqual(len(recording_store.snapshots), state.current_step + 1)
         self.assertEqual(
             [len(item.action_history) for item in recording_store.snapshots],
-            list(range(state.current_step + 1)),
+            [0, 1, 2, 3, 4, 10],
         )
         self.assertEqual(recording_store.snapshots[0].status, "running")
         self.assertEqual(recording_store.snapshots[-1].status, "completed")
@@ -158,6 +161,40 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         self.assertEqual(loaded.action_history[-1].action, AgentAction.FINISH)
         self.assertIsNotNone(loaded.created_at.tzinfo)
         self.assertIsNotNone(loaded.updated_at.tzinfo)
+
+    def test_compressed_metadata_survives_sqlite_round_trip(self):
+        orchestrator, _ = make_orchestrator(self.store)
+
+        state = orchestrator.run(make_request(), session_id="compressed-round-trip")
+        loaded = self.store.get_state("compressed-round-trip")
+
+        self.assertEqual(loaded.local_action_batch_count, state.local_action_batch_count)
+        self.assertEqual(
+            loaded.compressed_local_action_count,
+            state.compressed_local_action_count,
+        )
+        route_record = loaded.action_history[4]
+        compressed_records = [
+            record for record in loaded.action_history if record.compressed
+        ]
+        self.assertEqual(
+            route_record.compressed_actions,
+            [record.action for record in compressed_records],
+        )
+        self.assertTrue(
+            all(
+                record.batch_root_action is AgentAction.ESTIMATE_ROUTES
+                for record in compressed_records
+            )
+        )
+        self.assertEqual(
+            [record.batch_index for record in compressed_records],
+            list(range(1, len(compressed_records) + 1)),
+        )
+        self.assertEqual(
+            [(item.step, item.action) for item in loaded.convergence_history],
+            [(item.step, item.action) for item in state.convergence_history],
+        )
 
     def test_list_sessions_returns_summaries_and_status_filter(self):
         complete, _ = make_orchestrator(self.store)

@@ -27,7 +27,7 @@ from app.tools.models import ActionResult, ToolErrorType
 from app.validation import TripValidationResult
 
 
-CURRENT_AGENT_STATE_VERSION = 12
+CURRENT_AGENT_STATE_VERSION = 14
 
 
 def utc_now() -> datetime:
@@ -51,6 +51,11 @@ class ExecutionBudget(BaseModel):
     max_commute_replacement_attempts: int = Field(default=2, ge=0)
     max_commute_supplement_searches: int = Field(default=2, ge=0)
     minimum_total_attractions: int = Field(default=0, ge=0)
+    # 执行循环收敛预算：限制重复动作输入和连续无收益步骤。
+    max_repeated_action_inputs: int = Field(default=1, ge=1)
+    max_no_progress_steps: int = Field(default=3, ge=1)
+    # 单个物理步骤最多吸收的确定性本地动作，防止压缩批次内部无限跳转。
+    max_local_actions_per_step: int = Field(default=8, ge=1)
 
 
 class AgentAction(str, Enum):
@@ -83,6 +88,7 @@ AgentStatus = Literal[
     "failed",
     "max_steps_reached",
     "budget_exhausted",
+    "convergence_stopped",
 ]
 
 
@@ -105,6 +111,29 @@ class ActionRecord(BaseModel):
     provider_message: str | None = None
     validation_error_count: int = Field(default=0, ge=0)
     validation_warning_count: int = Field(default=0, ge=0)
+    # 收敛审计字段由执行循环在动作完成后补写。
+    input_fingerprint: str | None = None
+    state_fingerprint_before: str | None = None
+    state_fingerprint_after: str | None = None
+    made_progress: bool | None = None
+    # 状态跳转压缩审计：被吸收到同一物理步骤的子动作仍保留独立记录。
+    compressed: bool = False
+    batch_root_action: AgentAction | None = None
+    batch_index: int = Field(default=0, ge=0)
+    compressed_actions: list[AgentAction] = Field(default_factory=list)
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
+class ConvergenceRecord(BaseModel):
+    """一次成功动作的收敛判断记录。"""
+
+    step: int
+    action: AgentAction
+    input_fingerprint: str
+    state_fingerprint_before: str
+    state_fingerprint_after: str
+    made_progress: bool
+    reason: str
     recorded_at: datetime = Field(default_factory=utc_now)
 
 
@@ -377,6 +406,18 @@ class AgentState(BaseModel):
     validation_history: list[TripValidationResult] = Field(default_factory=list)
     plan_normalization_history: list[PlanNormalizationRecord] = Field(default_factory=list)
 
+    # 执行循环收敛状态：完整评估输入、成功动作输入和无收益连续次数。
+    evaluation_input_fingerprints: dict[str, str] = Field(default_factory=dict)
+    successful_action_inputs: dict[str, int] = Field(default_factory=dict)
+    no_progress_streak: int = Field(default=0, ge=0)
+    no_progress_total: int = Field(default=0, ge=0)
+    convergence_history: list[ConvergenceRecord] = Field(default_factory=list)
+    convergence_terminated_reason: str | None = None
+
+    # 状态跳转压缩指标：批次数与被吸收的逻辑动作数会随检查点持久化。
+    local_action_batch_count: int = Field(default=0, ge=0)
+    compressed_local_action_count: int = Field(default=0, ge=0)
+
     # 可审计执行历史：动作次数、每一步记录和用户可见错误。
     attempts_by_action: dict[str, int] = Field(default_factory=dict)
     action_history: list[ActionRecord] = Field(default_factory=list)
@@ -415,6 +456,9 @@ class AgentState(BaseModel):
         max_commute_replacement_attempts: int = 2,
         max_commute_supplement_searches: int = 2,
         minimum_total_attractions: int = 0,
+        max_repeated_action_inputs: int = 1,
+        max_no_progress_steps: int = 3,
+        max_local_actions_per_step: int = 8,
         max_duration_seconds: float = 180.0,
         max_tool_calls: int = 15,
         max_llm_calls: int = 6,
@@ -435,6 +479,9 @@ class AgentState(BaseModel):
                 max_commute_replacement_attempts=max_commute_replacement_attempts,
                 max_commute_supplement_searches=max_commute_supplement_searches,
                 minimum_total_attractions=minimum_total_attractions,
+                max_repeated_action_inputs=max_repeated_action_inputs,
+                max_no_progress_steps=max_no_progress_steps,
+                max_local_actions_per_step=max_local_actions_per_step,
             )
         now = utc_now()
         values: dict[str, Any] = {

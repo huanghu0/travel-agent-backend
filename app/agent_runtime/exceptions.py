@@ -39,3 +39,11 @@ class AgentBudgetExceededError(AgentRuntimeError):
     def __init__(self, reason: str, state: AgentState):
         super().__init__(reason, state)
         self.reason = reason
+
+
+class AgentConvergenceError(AgentRuntimeError):
+    """重复动作或连续无收益动作触发提前终止。"""
+
+    def __init__(self, reason: str, state: AgentState):
+        super().__init__(reason, state)
+        self.reason = reason

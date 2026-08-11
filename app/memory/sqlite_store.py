@@ -11,7 +11,8 @@ from app.agent_runtime.state import (
     AgentState,
     AgentStatus,
 )
-from app.memory.models import AgentSessionSummary
+from app.memory.execution_analytics import build_execution_baseline
+from app.memory.models import AgentSessionSummary, ExecutionBaselineReport
 
 
 class SessionNotFoundError(LookupError):
@@ -77,6 +78,12 @@ class SQLiteAgentStateStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_agent_sessions_status
                 ON agent_sessions(status)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_agent_sessions_city
+                ON agent_sessions(city)
                 """
             )
 
@@ -163,3 +170,69 @@ class SQLiteAgentStateStore:
         with self._connection() as connection:
             rows = connection.execute(query, params).fetchall()
         return [AgentSessionSummary.model_validate(dict(row)) for row in rows]
+
+    def get_execution_baseline(
+        self,
+        *,
+        limit: int = 1000,
+        status: AgentStatus | None = None,
+        city: str | None = None,
+        top_n: int = 20,
+        max_cycle_span: int = 12,
+    ) -> ExecutionBaselineReport:
+        """从最近会话检查点统计完成率、动作跳转和常见循环。"""
+
+        # 步骤 1：限制分析样本和排行榜规模，避免一次读取过多大型 state_json。
+        safe_limit = max(1, min(limit, 5000))
+        safe_top_n = max(1, min(top_n, 100))
+        safe_cycle_span = max(1, min(max_cycle_span, 50))
+        normalized_city = city.strip() if city and city.strip() else None
+
+        clauses: list[str] = []
+        params: list[object] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if normalized_city is not None:
+            clauses.append("city = ?")
+            params.append(normalized_city)
+        where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        # 步骤 2：先得到完整匹配数量，再按更新时间读取最近样本。
+        with self._connection() as connection:
+            matching_session_count = connection.execute(
+                f"SELECT COUNT(*) FROM agent_sessions{where_clause}",
+                params,
+            ).fetchone()[0]
+            rows = connection.execute(
+                f"""
+                SELECT state_json
+                FROM agent_sessions
+                {where_clause}
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                [*params, safe_limit],
+            ).fetchall()
+
+        # 步骤 3：逐条恢复 AgentState，单条旧数据损坏不会阻断整份基线报告。
+        states: list[AgentState] = []
+        invalid_session_count = 0
+        for row in rows:
+            try:
+                states.append(AgentState.model_validate_json(row["state_json"]))
+            except (TypeError, ValueError):
+                invalid_session_count += 1
+
+        # 步骤 4：在内存中聚合动作、跳转、循环以及城市完成率。
+        return build_execution_baseline(
+            states,
+            requested_limit=safe_limit,
+            matching_session_count=matching_session_count,
+            sampled_row_count=len(rows),
+            invalid_session_count=invalid_session_count,
+            status_filter=status,
+            city_filter=normalized_city,
+            top_n=safe_top_n,
+            max_cycle_span=safe_cycle_span,
+        )

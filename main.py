@@ -5,6 +5,7 @@ from starlette.concurrency import run_in_threadpool
 from app.agent_runtime import (
     AgentActionError,
     AgentBudgetExceededError,
+    AgentConvergenceError,
     AgentMaxStepsError,
     AgentState,
     AgentStatus,
@@ -14,6 +15,7 @@ from app.agents import PlannerAgent
 from app.core.config import settings
 from app.memory import (
     AgentSessionSummary,
+    ExecutionBaselineReport,
     SessionNotFoundError,
     SQLiteAgentStateStore,
     SQLiteRouteCache,
@@ -59,6 +61,9 @@ trip_orchestrator = TripOrchestrator(
     tool_registry=trip_tool_registry,
     max_steps=settings.AGENT_MAX_STEPS,
     max_attempts_per_action=settings.AGENT_MAX_ATTEMPTS_PER_ACTION,
+    max_repeated_action_inputs=settings.AGENT_MAX_REPEATED_ACTION_INPUTS,
+    max_no_progress_steps=settings.AGENT_MAX_NO_PROGRESS_STEPS,
+    max_local_actions_per_step=settings.AGENT_MAX_LOCAL_ACTIONS_PER_STEP,
     max_repair_attempts=settings.AGENT_MAX_REPAIR_ATTEMPTS,
     max_route_optimization_attempts=(
         settings.AGENT_MAX_ROUTE_OPTIMIZATION_ATTEMPTS
@@ -171,6 +176,14 @@ def _action_error_detail(exc: AgentActionError) -> str:
     )
 
 
+def _convergence_error_detail(exc: AgentConvergenceError) -> str:
+    return (
+        f"旅行规划失败（阶段：执行循环收敛，"
+        f"步骤：{exc.state.current_step}/{exc.state.max_steps}，"
+        f"会话：{exc.state.session_id}）: {exc.reason}"
+    )
+
+
 def _max_steps_error_detail(exc: AgentMaxStepsError) -> str:
     return (
         f"旅行规划失败（阶段：执行循环，"
@@ -220,6 +233,10 @@ async def generate_trip_plan(request: TripRequest):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AgentActionError as exc:
         raise HTTPException(status_code=500, detail=_action_error_detail(exc)) from exc
+    except AgentConvergenceError as exc:
+        raise HTTPException(
+            status_code=409, detail=_convergence_error_detail(exc)
+        ) from exc
     except AgentMaxStepsError as exc:
         raise HTTPException(status_code=500, detail=_max_steps_error_detail(exc)) from exc
     except Exception as exc:
@@ -227,6 +244,30 @@ async def generate_trip_plan(request: TripRequest):
             status_code=500,
             detail=f"旅行规划失败（阶段：智能体执行）: {exc}",
         ) from exc
+
+
+@app.get(
+    "/api/trip/analytics/execution-baseline",
+    summary="查询状态跳转路径和完成率基线",
+    response_model=ExecutionBaselineReport,
+)
+def get_execution_baseline(
+    limit: int = Query(default=1000, ge=1, le=5000),
+    status: AgentStatus | None = Query(default=None),
+    city: str | None = Query(default=None, min_length=1, max_length=100),
+    top_n: int = Query(default=20, ge=1, le=100),
+    max_cycle_span: int = Query(default=12, ge=1, le=50),
+):
+    """从 SQLite 最近会话统计完成率、动作次数、跳转路径和常见循环。"""
+
+    # 该接口只读取历史检查点，不执行高德、LLM 或任何行程修复动作。
+    return agent_state_store.get_execution_baseline(
+        limit=limit,
+        status=status,
+        city=city,
+        top_n=top_n,
+        max_cycle_span=max_cycle_span,
+    )
 
 
 @app.get(
@@ -277,6 +318,10 @@ def resume_trip_session(session_id: str):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AgentActionError as exc:
         raise HTTPException(status_code=500, detail=_action_error_detail(exc)) from exc
+    except AgentConvergenceError as exc:
+        raise HTTPException(
+            status_code=409, detail=_convergence_error_detail(exc)
+        ) from exc
     except AgentMaxStepsError as exc:
         raise HTTPException(status_code=500, detail=_max_steps_error_detail(exc)) from exc
     except Exception as exc:
