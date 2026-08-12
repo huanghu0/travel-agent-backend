@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -13,6 +13,14 @@ from app.tools.models import ActionResult, ToolDescriptor, ToolErrorType
 
 ToolHandler = Callable[[BaseModel], Any]
 ResultValidator = Callable[[Any], Any]
+
+
+class CallInjector(Protocol):
+    """为工具调用提供可选的测试期代理，例如确定性故障注入。"""
+
+    def invoke(self, target: str, callback: Callable[..., Any], *args, **kwargs) -> Any:
+        """调用目标函数，或在调用前返回测试输出、抛出测试异常。"""
+
 
 
 class ToolResultError(RuntimeError):
@@ -49,8 +57,10 @@ class ToolDefinition:
 class ToolRegistry:
     """只注册和执行明确加入白名单的工具。"""
 
-    def __init__(self):
+    def __init__(self, *, call_injector: CallInjector | None = None):
         self._tools: dict[str, ToolDefinition] = {}
+        # 生产环境默认为 None；只有验收测试显式传入时才启用注入。
+        self._call_injector = call_injector
 
     def register(self, definition: ToolDefinition) -> None:
         # 注册阶段就拒绝空名称、重复名称和非法成本，避免运行时工具表不确定。
@@ -122,7 +132,11 @@ class ToolRegistry:
 
         try:
             # 步骤 3：执行实际处理器，例如高德 API 或 PlannerAgent。
-            output = definition.handler(validated_input)
+            output = (
+                self._call_injector.invoke(name, definition.handler, validated_input)
+                if self._call_injector is not None
+                else definition.handler(validated_input)
+            )
             # 步骤 4：先处理供应商级错误，例如高德 status=0、infocode 等。
             if definition.result_validator is not None:
                 output = definition.result_validator(output)
