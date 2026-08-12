@@ -8,12 +8,18 @@ from pydantic import BaseModel, Field
 
 from app.providers.amap.client import AmapProviderClient
 from app.providers.amap.errors import AmapProviderError, validate_amap_response
+from app.providers.amap.restaurant_cache import RestaurantCache
 from app.providers.amap.route_cache import RouteCache
 from app.providers.amap.models import (
     AttractionSearchResult,
     GeoPoint,
     HotelSearchResult,
+    LocationResolutionResult,
     NearbyAttractionSearchResult,
+    PoiDetailResult,
+    PoiSearchResult,
+    RestaurantSearchAnchor,
+    RestaurantSearchResult,
     RouteEstimate,
     RouteEstimateResult,
     RouteLegRequest,
@@ -49,6 +55,35 @@ class GetWeatherInput(BaseModel):
 
 class SearchHotelsInput(BaseModel):
     city: str = Field(min_length=1)
+
+
+class SearchPoisInput(BaseModel):
+    """通用地点搜索输入；有 center 时执行周边搜索。"""
+
+    city: str = Field(default="")
+    keywords: str = Field(min_length=1)
+    types: str = Field(default="")
+    center: GeoPoint | None = None
+    radius_meters: int | None = Field(default=None, ge=100, le=50000)
+    limit: int | None = Field(default=None, ge=1, le=25)
+
+
+class SearchRestaurantsInput(BaseModel):
+    """一次有界批量餐饮搜索输入。"""
+
+    city: str = Field(min_length=1)
+    keywords: str = Field(default="餐厅", min_length=1)
+    anchors: list[RestaurantSearchAnchor] = Field(default_factory=list)
+    radius_meters: int | None = Field(default=None, ge=100, le=50000)
+
+
+class GetPoiDetailInput(BaseModel):
+    poi_id: str = Field(min_length=1)
+
+
+class ResolveLocationInput(BaseModel):
+    query: str = Field(min_length=1)
+    city: str = Field(default="")
 
 
 class EstimateRoutesInput(BaseModel):
@@ -109,17 +144,25 @@ def _attraction_keywords(preferences: list[str]) -> str:
 def _standardized_provider(
     map_provider: Any | None,
     route_cache: RouteCache | None,
+    restaurant_cache: RestaurantCache | None,
 ) -> Any:
     """兼容注入原始高德客户端，也允许直接注入已标准化 Provider。"""
 
     if map_provider is None:
-        return AmapProviderClient(route_cache=route_cache)
+        return AmapProviderClient(
+            route_cache=route_cache,
+            restaurant_cache=restaurant_cache,
+        )
     if all(
         callable(getattr(map_provider, name, None))
         for name in ("search_attractions", "search_hotels", "get_weather")
     ):
         return map_provider
-    return AmapProviderClient(raw_client=map_provider, route_cache=route_cache)
+    return AmapProviderClient(
+        raw_client=map_provider,
+        route_cache=route_cache,
+        restaurant_cache=restaurant_cache,
+    )
 
 
 def build_trip_tool_registry(
@@ -127,6 +170,7 @@ def build_trip_tool_registry(
     planner_agent: Any,
     map_provider: Any | None = None,
     route_cache: RouteCache | None = None,
+    restaurant_cache: RestaurantCache | None = None,
     attraction_agent: Any | None = None,
     weather_agent: Any | None = None,
     hotel_agent: Any | None = None,
@@ -137,7 +181,7 @@ def build_trip_tool_registry(
     过滤、排序、裁剪后的稳定结构。可选旧 Agent 参数仅用于迁移兼容。
     """
 
-    provider = _standardized_provider(map_provider, route_cache)
+    provider = _standardized_provider(map_provider, route_cache, restaurant_cache)
 
     # 步骤 1：选择事实查询处理器。默认走标准化 Provider；显式旧 Agent 保留原链路。
     if attraction_agent is None:
@@ -212,7 +256,60 @@ def build_trip_tool_registry(
         hotel_validator = validate_map_result
         hotel_llm_cost = 1
 
-    # 步骤 2：定义真实路线查询处理器；短行程直接返回空结果，避免无效 HTTP。
+    # 步骤 2：装配通用地点、真实餐饮、详情与地址解析能力。
+    def search_pois(value: SearchPoisInput) -> PoiSearchResult:
+        searcher = getattr(provider, "search_pois", None)
+        if not callable(searcher):
+            return PoiSearchResult(
+                query_city=value.city,
+                keywords=value.keywords,
+                types=value.types,
+                center=value.center,
+                radius_meters=value.radius_meters,
+            )
+        return _call_amap(
+            lambda: searcher(
+                city=value.city,
+                keywords=value.keywords,
+                types=value.types,
+                center=value.center,
+                radius_meters=value.radius_meters,
+                limit=value.limit,
+            )
+        )
+
+    def search_restaurants(value: SearchRestaurantsInput) -> RestaurantSearchResult:
+        searcher = getattr(provider, "search_restaurants", None)
+        if not callable(searcher) or not value.anchors:
+            return RestaurantSearchResult(
+                query_city=value.city,
+                keywords=value.keywords,
+                requested_anchors=len(value.anchors),
+            )
+        return _call_amap(
+            lambda: searcher(
+                city=value.city,
+                keywords=value.keywords,
+                anchors=value.anchors,
+                radius_meters=value.radius_meters,
+            )
+        )
+
+    def get_poi_detail(value: GetPoiDetailInput) -> PoiDetailResult:
+        getter = getattr(provider, "get_poi_detail", None)
+        if not callable(getter):
+            return PoiDetailResult(poi_id=value.poi_id)
+        return _call_amap(lambda: getter(value.poi_id))
+
+    def resolve_location(value: ResolveLocationInput) -> LocationResolutionResult:
+        resolver = getattr(provider, "resolve_location", None)
+        if not callable(resolver):
+            return LocationResolutionResult(query=value.query, city=value.city)
+        return _call_amap(
+            lambda: resolver(query=value.query, city=value.city)
+        )
+
+    # 步骤 3：定义真实路线查询处理器；短行程直接返回空结果，避免无效 HTTP。
     def estimate_routes(value: EstimateRoutesInput) -> RouteEstimateResult:
         # 没有可连接地点的短行程不需要发起外部路线请求。
         if not value.legs:
@@ -257,7 +354,7 @@ def build_trip_tool_registry(
             routes=routes,
         )
 
-    # 步骤 3：注册固定工具白名单和稳定输入/输出 Schema。
+    # 步骤 4：注册固定工具白名单和稳定输入/输出 Schema。
     registry = ToolRegistry()
     registry.register(
         ToolDefinition(
@@ -304,6 +401,50 @@ def build_trip_tool_registry(
             invalid_output_retryable=True,
             result_validator=hotel_validator,
             llm_call_cost=hotel_llm_cost,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="search_pois",
+            description="搜索并返回标准化、去重和裁剪后的通用高德地点候选",
+            input_model=SearchPoisInput,
+            handler=search_pois,
+            output_model=PoiSearchResult,
+            invalid_output_retryable=True,
+            llm_call_cost=0,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="search_restaurants",
+            description="围绕行程锚点批量搜索真实高德餐厅候选",
+            input_model=SearchRestaurantsInput,
+            handler=search_restaurants,
+            output_model=RestaurantSearchResult,
+            invalid_output_retryable=True,
+            llm_call_cost=0,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="get_poi_detail",
+            description="按高德 POI ID 查询标准化地点详情",
+            input_model=GetPoiDetailInput,
+            handler=get_poi_detail,
+            output_model=PoiDetailResult,
+            invalid_output_retryable=True,
+            llm_call_cost=0,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="resolve_location",
+            description="把地点名称或地址解析为可用于路线查询的高德坐标",
+            input_model=ResolveLocationInput,
+            handler=resolve_location,
+            output_model=LocationResolutionResult,
+            invalid_output_retryable=True,
+            llm_call_cost=0,
         )
     )
     registry.register(

@@ -301,13 +301,13 @@ class ToolRegistryTests(unittest.TestCase):
         finally:
             AmapClient.http_get = previous
 
-        self.assertTrue(captured["url"].endswith("/v3/place/around"))
+        self.assertTrue(captured["url"].endswith("/v5/place/around"))
         self.assertEqual(captured["params"]["location"], "120.160000,30.250000")
-        self.assertEqual(captured["params"]["citylimit"], "true")
+        self.assertEqual(captured["params"]["city_limit"], "true")
         self.assertEqual(captured["params"]["sortrule"], "distance")
         self.assertEqual(captured["params"]["radius"], 50000)
-        self.assertEqual(captured["params"]["offset"], 25)
-        self.assertEqual(captured["params"]["page"], 1)
+        self.assertEqual(captured["params"]["page_size"], 25)
+        self.assertEqual(captured["params"]["page_num"], 1)
 
     def test_empty_route_batch_returns_without_provider_call(self):
         class Provider:
@@ -388,6 +388,10 @@ class ToolRegistryTests(unittest.TestCase):
                 "supplement_attractions",
                 "get_weather",
                 "search_hotels",
+                "search_pois",
+                "search_restaurants",
+                "get_poi_detail",
+                "resolve_location",
                 "estimate_routes",
                 "generate_plan",
                 "repair_plan",
@@ -400,6 +404,10 @@ class ToolRegistryTests(unittest.TestCase):
         )
         self.assertEqual(main.trip_tool_registry.llm_call_cost("get_weather"), 0)
         self.assertEqual(main.trip_tool_registry.llm_call_cost("search_hotels"), 0)
+        self.assertEqual(main.trip_tool_registry.llm_call_cost("search_pois"), 0)
+        self.assertEqual(main.trip_tool_registry.llm_call_cost("search_restaurants"), 0)
+        self.assertEqual(main.trip_tool_registry.llm_call_cost("get_poi_detail"), 0)
+        self.assertEqual(main.trip_tool_registry.llm_call_cost("resolve_location"), 0)
         self.assertEqual(main.trip_tool_registry.llm_call_cost("estimate_routes"), 0)
 
 

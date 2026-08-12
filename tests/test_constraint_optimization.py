@@ -5,8 +5,12 @@ from pathlib import Path
 from app.commute import CommuteConstraintEvaluator
 from app.agent_runtime import AgentAction, AgentState, TripOrchestrator
 from app.constraints import ConstraintEvaluator, DeterministicConstraintOptimizer
+from app.core.config import settings
 from app.memory import SQLiteAgentStateStore
-from app.plan_content import plan_content_source_fingerprint
+from app.plan_content import (
+    plan_content_source_fingerprint,
+    restaurant_search_source_fingerprint,
+)
 from app.providers.amap.models import RouteEstimate, RouteEstimateResult
 from app.routing import evaluate_route_quality, plan_route_fingerprint
 from app.schemas.trip_schema import TripPlan, TripRequest
@@ -330,11 +334,22 @@ class ConstraintOrchestratorTests(unittest.TestCase):
         state.schedule_quality_report = evaluator.evaluate(request, plan, routes)
         state.schedule_quality_plan_fingerprint = routes.plan_fingerprint
         state.schedule_optimization_status = "skipped"
+        state.restaurants = {
+            "provider": "amap",
+            "query_city": request.city,
+            "keywords": "餐厅",
+            "candidates": [],
+        }
+        state.restaurant_plan_fingerprint = restaurant_search_source_fingerprint(
+            plan,
+            max_anchors=settings.AMAP_MAX_RESTAURANT_SEARCH_ANCHORS,
+        )
         state.plan_consistency_fingerprint = plan_content_source_fingerprint(
             request,
             plan,
             routes,
             state.schedule_quality_report,
+            state.restaurants,
         )
         return state
 

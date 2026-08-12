@@ -13,7 +13,12 @@ from app.constraints.models import (
     DayConstraintReport,
     TripConstraintReport,
 )
-from app.schemas.trip_schema import Attraction, TripPlan, TripRequest
+from app.plan_content.restaurant_hours import (
+    format_opening_ranges,
+    opening_status_for_interval,
+    parse_clock,
+)
+from app.schemas.trip_schema import Attraction, Meal, TripPlan, TripRequest
 from app.scheduling import ScheduleQualityReport
 
 
@@ -141,6 +146,7 @@ class ConstraintEvaluator:
                     day_schedule.timeline,
                     issues,
                 )
+            self._check_meal_opening_hours(day_index, day.meals, issues)
             self._check_daily_load(day_index, day.attractions, issues)
             self._check_weather(
                 day_index,
@@ -215,6 +221,48 @@ class ConstraintEvaluator:
                         "end": self._format_clock(self.lunch_end),
                     },
                     actual={"start": item.start_time, "end": item.end_time},
+                )
+            )
+
+    def _check_meal_opening_hours(
+        self,
+        day_index: int,
+        meals: list[Meal],
+        issues: list[ConstraintIssue],
+    ) -> None:
+        """拦截明确安排在餐厅营业时间之外的餐次。
+
+        营业时间缺失或无法解析时保持 unknown，不制造会导致循环不收敛的错误。
+        """
+
+        for meal_index, meal in enumerate(meals):
+            if not meal.opening_hours or not meal.planned_start_time or not meal.planned_end_time:
+                continue
+            try:
+                start = parse_clock(meal.planned_start_time)
+                end = parse_clock(meal.planned_end_time)
+            except ValueError:
+                continue
+            status = opening_status_for_interval(meal.opening_hours, start, end)
+            if status != "closed":
+                continue
+            issues.append(
+                ConstraintIssue(
+                    code="meal.outside_opening_hours",
+                    severity="error",
+                    path=f"days[{day_index}].meals[{meal_index}]",
+                    message=(
+                        f"{meal.name} is scheduled at {meal.planned_start_time}-"
+                        f"{meal.planned_end_time} outside its known opening hours"
+                    ),
+                    repair_hint="Replace it with an open restaurant or adjust the meal time",
+                    day_index=day_index,
+                    penalty=1500.0,
+                    expected=format_opening_ranges(meal.opening_hours),
+                    actual={
+                        "start": meal.planned_start_time,
+                        "end": meal.planned_end_time,
+                    },
                 )
             )
 

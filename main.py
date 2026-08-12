@@ -26,6 +26,7 @@ from app.memory import (
     QualityBaselineReport,
     SessionNotFoundError,
     SQLiteAgentStateStore,
+    SQLiteRestaurantCache,
     SQLiteRouteCache,
 )
 from app.schemas.trip_schema import TripPlanResponse, TripRequest
@@ -59,10 +60,17 @@ route_cache = (
     if settings.AMAP_ROUTE_CACHE_ENABLED
     else None
 )
+# 餐饮缓存与会话记忆共用数据库文件，但使用独立表和较短 TTL。
+restaurant_cache = (
+    SQLiteRestaurantCache(settings.AGENT_MEMORY_DB_PATH)
+    if settings.AMAP_RESTAURANT_CACHE_ENABLED
+    else None
+)
 # 步骤 3：注册工具白名单。景点、天气、酒店直接调用高德，不经过 LLM。
 trip_tool_registry = build_trip_tool_registry(
     planner_agent=planner_agent,
     route_cache=route_cache,
+    restaurant_cache=restaurant_cache,
 )
 # 步骤 4：编排器负责按固定状态机循环执行，并统一应用预算、重试和熔断策略。
 trip_orchestrator = TripOrchestrator(

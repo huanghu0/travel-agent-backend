@@ -38,6 +38,7 @@ from app.agent_runtime.state import (
     RouteOptimizationRecord,
     ScheduleOptimizationRecord,
 )
+from app.core.config import settings
 from app.commute import (
     CommuteCandidatePoolSupplementer,
     CommuteConstraintEvaluator,
@@ -52,10 +53,16 @@ from app.plan_content import (
     MinimumAttractionRefillOptimizer,
     TripPlanConsistencyRebuilder,
     attraction_identity as content_attraction_identity,
+    build_restaurant_search_anchors,
     count_attractions,
     plan_content_source_fingerprint,
+    restaurant_search_source_fingerprint,
 )
-from app.providers.amap.models import NearbyAttractionSearchResult, RouteEstimateResult
+from app.providers.amap.models import (
+    NearbyAttractionSearchResult,
+    RestaurantSearchResult,
+    RouteEstimateResult,
+)
 from app.routing import (
     DeterministicRouteOptimizer,
     build_route_legs,
@@ -85,6 +92,7 @@ _ACTION_REASONS = {
     AgentAction.SEARCH_ATTRACTIONS: "景点数据尚未获取",
     AgentAction.GET_WEATHER: "天气数据尚未获取",
     AgentAction.SEARCH_HOTELS: "酒店数据尚未获取",
+    AgentAction.SEARCH_RESTAURANTS: "最终地点时间轴已稳定，需要查询真实餐饮候选",
     AgentAction.GENERATE_PLAN: "基础数据已就绪，需要生成行程",
     AgentAction.ESTIMATE_ROUTES: "行程已生成，需要查询相邻景点的真实路线",
     AgentAction.EVALUATE_COMMUTE: "\u771f\u5b9e\u8def\u7ebf\u5df2\u5c31\u7eea\uff0c\u9700\u8981\u8bc4\u4f30\u5355\u6bb5\u901a\u52e4\u4e0a\u9650",
@@ -951,11 +959,24 @@ class TripOrchestrator:
                 return AgentAction.OPTIMIZE_CONSTRAINTS
             return AgentAction.REFILL_ATTRACTIONS
 
+        # 路线、时间轴、约束和景点回填稳定后，再围绕最终地点搜索真实餐厅。
+        # 这样不会因前序优化改变景点顺序而重复消耗高德调用。
+        restaurant_fingerprint = restaurant_search_source_fingerprint(
+            state.trip_plan,
+            max_anchors=settings.AMAP_MAX_RESTAURANT_SEARCH_ANCHORS,
+        )
+        if (
+            state.restaurants is None
+            or state.restaurant_plan_fingerprint != restaurant_fingerprint
+        ):
+            return AgentAction.SEARCH_RESTAURANTS
+
         content_fingerprint = plan_content_source_fingerprint(
             state.request,
             state.trip_plan,
             state.route_estimates,
             state.schedule_quality_report,
+            state.restaurants,
         )
         if state.plan_consistency_fingerprint != content_fingerprint:
             return AgentAction.REBUILD_PLAN_CONTENT
@@ -2895,6 +2916,7 @@ class TripOrchestrator:
             state.trip_plan,
             route_estimates=state.route_estimates,
             schedule_quality_report=state.schedule_quality_report,
+            restaurants=state.restaurants,
         )
         after_route_fingerprint = plan_route_fingerprint(state.request, rebuilt)
         if after_route_fingerprint != before_route_fingerprint:
@@ -2905,6 +2927,7 @@ class TripOrchestrator:
             rebuilt,
             state.route_estimates,
             state.schedule_quality_report,
+            state.restaurants,
         )
         state.plan_consistency_rebuild_count += 1
         state.last_validation_result = None
@@ -3054,6 +3077,18 @@ class TripOrchestrator:
             return {"city": state.request.city}
         if action is AgentAction.SEARCH_HOTELS:
             return {"city": state.request.city}
+        if action is AgentAction.SEARCH_RESTAURANTS:
+            if state.trip_plan is None:
+                raise ValueError("Trip plan is required before restaurant search")
+            return {
+                "city": state.request.city,
+                "keywords": "餐厅",
+                "anchors": build_restaurant_search_anchors(
+                    state.trip_plan,
+                    max_anchors=settings.AMAP_MAX_RESTAURANT_SEARCH_ANCHORS,
+                ),
+                "radius_meters": settings.AMAP_RESTAURANT_SEARCH_RADIUS_METERS,
+            }
         if action is AgentAction.GENERATE_PLAN:
             return {
                 "request": state.request,
@@ -3152,6 +3187,19 @@ class TripOrchestrator:
             if not isinstance(result.data, dict):
                 raise ValueError("酒店工具结果必须是对象")
             state.hotels = result.data
+            return
+        if action is AgentAction.SEARCH_RESTAURANTS:
+            if state.trip_plan is None:
+                raise ValueError("Trip plan is required before saving restaurants")
+            restaurants = RestaurantSearchResult.model_validate(result.data)
+            state.restaurants = restaurants.model_dump(mode="json")
+            state.restaurant_plan_fingerprint = restaurant_search_source_fingerprint(
+                state.trip_plan,
+                max_anchors=settings.AMAP_MAX_RESTAURANT_SEARCH_ANCHORS,
+            )
+            # 餐厅候选变化后，派生餐饮、预算和最终校验都必须重新生成。
+            state.plan_consistency_fingerprint = None
+            self._invalidate_evaluation_fingerprints(state, "constraints", "validation")
             return
         if action is AgentAction.GENERATE_PLAN:
             state.trip_plan = self._normalize_llm_plan(

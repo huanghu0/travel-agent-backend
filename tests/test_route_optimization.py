@@ -335,7 +335,7 @@ class RouteOptimizationOrchestratorTests(unittest.TestCase):
             2,
         )
         self.assertEqual(state.llm_call_count, 1)
-        self.assertEqual(state.tool_call_count, 6)
+        self.assertEqual(state.tool_call_count, 7)
 
     def test_candidate_below_real_improvement_threshold_is_reverted(self):
         orchestrator, provider = self.make_orchestrator("revert")

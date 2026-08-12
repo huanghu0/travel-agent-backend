@@ -80,6 +80,17 @@ class Meal(BaseModel):
     location: Optional[Location] = Field(default=None, description="经纬度坐标")
     description: Optional[str] = Field(default=None, description="描述")
     estimated_cost: int = Field(default=0, description="预估费用(元)")
+    # 真实餐饮闭环的可选来源字段；均提供默认值以兼容旧会话和旧响应。
+    poi_id: str = Field(default="", description="高德 POI ID")
+    rating: Optional[float] = Field(default=None, description="高德评分")
+    telephone: str = Field(default="", description="联系电话")
+    category: str = Field(default="", description="餐饮类别")
+    opening_hours: str = Field(default="", description="营业时间")
+    source: str = Field(default="", description="数据来源: amap/fallback")
+    # 以下字段由确定性时间轴推导；提供默认值以兼容旧响应和 SQLite 旧状态。
+    planned_start_time: str = Field(default="", description="预计开始用餐时间")
+    planned_end_time: str = Field(default="", description="预计结束用餐时间")
+    opening_status: str = Field(default="", description="营业状态: open/unknown/fallback")
 
 
 class Hotel(BaseModel):

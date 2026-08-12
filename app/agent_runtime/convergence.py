@@ -132,6 +132,8 @@ def business_state_fingerprint(state: AgentState) -> str:
             "attractions": state.attractions,
             "weather": state.weather,
             "hotels": state.hotels,
+            "restaurants": state.restaurants,
+            "restaurant_plan_fingerprint": state.restaurant_plan_fingerprint,
             "trip_plan": state.trip_plan,
             "route_estimates": state.route_estimates,
             "route_quality_report": state.route_quality_report,
@@ -186,6 +188,11 @@ def action_input_fingerprint(state: AgentState, action: AgentAction) -> str:
         payload = {"city": request.city}
     elif action is AgentAction.SEARCH_HOTELS:
         payload = {"city": request.city, "accommodation": request.accommodation}
+    elif action is AgentAction.SEARCH_RESTAURANTS:
+        payload = {
+            "city": request.city,
+            "plan": state.trip_plan,
+        }
     elif action is AgentAction.GENERATE_PLAN:
         payload = {
             "request": request,
@@ -250,6 +257,7 @@ def action_input_fingerprint(state: AgentState, action: AgentAction) -> str:
             "attractions": state.attractions,
             "weather": state.weather,
             "hotels": state.hotels,
+            "restaurants": state.restaurants,
         }
     elif action is AgentAction.FINISH:
         payload = {"validation": state.last_validation_result}

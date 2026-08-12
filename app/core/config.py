@@ -254,6 +254,24 @@ class Settings:
     AMAP_MAX_HOTEL_CANDIDATES: int = int(
         _env("AMAP_MAX_HOTEL_CANDIDATES", "6") or "6"
     )
+    AMAP_MAX_POI_CANDIDATES: int = int(
+        _env("AMAP_MAX_POI_CANDIDATES", "10") or "10"
+    )
+    AMAP_MAX_RESTAURANT_CANDIDATES_PER_ANCHOR: int = int(
+        _env("AMAP_MAX_RESTAURANT_CANDIDATES_PER_ANCHOR", "4") or "4"
+    )
+    AMAP_MAX_RESTAURANT_SEARCH_ANCHORS: int = int(
+        _env("AMAP_MAX_RESTAURANT_SEARCH_ANCHORS", "8") or "8"
+    )
+    AMAP_RESTAURANT_SEARCH_RADIUS_METERS: int = int(
+        _env("AMAP_RESTAURANT_SEARCH_RADIUS_METERS", "2500") or "2500"
+    )
+    AMAP_RESTAURANT_CACHE_ENABLED: bool = _env_bool(
+        "AMAP_RESTAURANT_CACHE_ENABLED", True
+    )
+    AMAP_RESTAURANT_CACHE_TTL_SECONDS: int = int(
+        _env("AMAP_RESTAURANT_CACHE_TTL_SECONDS", "21600") or "21600"
+    )
     AMAP_MAX_WEATHER_DAYS: int = int(
         _env("AMAP_MAX_WEATHER_DAYS", "7") or "7"
     )

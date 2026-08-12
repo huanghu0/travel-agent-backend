@@ -101,6 +101,101 @@ class WeatherSearchResult(BaseModel):
     forecasts: list[WeatherForecast] = Field(default_factory=list)
 
 
+class PoiCandidate(PlaceCandidate):
+    """通用 POI 候选，供地点解析、交通枢纽和应急设施等场景复用。"""
+
+    category: str = ""
+    type_code: str = ""
+    opening_hours: str = ""
+    average_cost: float | None = Field(default=None, ge=0)
+    distance_meters: int | None = Field(default=None, ge=0)
+
+
+class PoiSearchResult(BaseModel):
+    """POI 搜索 2.0 的稳定裁剪结果。"""
+
+    provider: Literal["amap"] = "amap"
+    query_city: str
+    keywords: str
+    types: str = ""
+    center: GeoPoint | None = None
+    radius_meters: int | None = Field(default=None, ge=100, le=50000)
+    total_received: int = Field(default=0, ge=0)
+    candidates: list[PoiCandidate] = Field(default_factory=list)
+
+
+class RestaurantSearchSnapshot(BaseModel):
+    """与具体行程锚点无关、可跨会话复用的周边餐饮搜索快照。"""
+
+    provider: Literal["amap"] = "amap"
+    query_city: str
+    keywords: str
+    center: GeoPoint
+    radius_meters: int = Field(ge=100, le=50000)
+    page_size: int = Field(default=20, ge=1, le=25)
+    total_received: int = Field(default=0, ge=0)
+    candidates: list[PoiCandidate] = Field(default_factory=list)
+
+
+class RestaurantCandidate(PlaceCandidate):
+    """真实餐饮 POI，携带确定性餐次锚点和距离信息。"""
+
+    category: str = ""
+    type_code: str = ""
+    opening_hours: str = ""
+    average_cost: float | None = Field(default=None, ge=0)
+    distance_meters: int | None = Field(default=None, ge=0)
+    anchor_id: str = ""
+    day_index: int = Field(default=0, ge=0)
+    meal_type: Literal["breakfast", "lunch", "dinner", "snack"] = "lunch"
+
+
+class RestaurantSearchAnchor(BaseModel):
+    """一次附近餐饮搜索对应的行程餐次锚点。"""
+
+    anchor_id: str = Field(min_length=1)
+    day_index: int = Field(ge=0)
+    meal_type: Literal["breakfast", "lunch", "dinner", "snack"]
+    name: str = Field(min_length=1)
+    location: GeoPoint
+
+
+class RestaurantSearchResult(BaseModel):
+    """多个餐次锚点的真实餐饮候选集合。"""
+
+    provider: Literal["amap"] = "amap"
+    query_city: str
+    keywords: str
+    requested_anchors: int = Field(default=0, ge=0)
+    searched_anchors: int = Field(default=0, ge=0)
+    truncated_anchors: int = Field(default=0, ge=0)
+    total_received: int = Field(default=0, ge=0)
+    cache_hits: int = Field(default=0, ge=0)
+    cache_misses: int = Field(default=0, ge=0)
+    candidates: list[RestaurantCandidate] = Field(default_factory=list)
+
+
+class PoiDetailResult(BaseModel):
+    """按高德 POI ID 查询的标准化详情。"""
+
+    provider: Literal["amap"] = "amap"
+    poi_id: str
+    found: bool = False
+    candidate: PoiCandidate | None = None
+
+
+class LocationResolutionResult(BaseModel):
+    """把用户地点文本解析成可用于路线查询的唯一坐标。"""
+
+    provider: Literal["amap"] = "amap"
+    query: str
+    city: str = ""
+    resolved: bool = False
+    source: Literal["poi", "geocode", "none"] = "none"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    candidate: PoiCandidate | None = None
+
+
 RouteMode = Literal["walking", "driving", "transit"]
 RouteLegType = Literal[
     "hotel_departure",

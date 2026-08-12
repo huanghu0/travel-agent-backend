@@ -2,6 +2,10 @@
 
 from app.providers.amap.client import AmapClient, AmapProviderClient
 from app.providers.amap.errors import AmapErrorKind, AmapProviderError
+from app.providers.amap.restaurant_cache import (
+    RestaurantCache,
+    restaurant_search_cache_key,
+)
 from app.providers.amap.route_cache import RouteCache, route_leg_cache_key
 from app.providers.amap.models import (
     AttractionCandidate,
@@ -10,6 +14,11 @@ from app.providers.amap.models import (
     HotelCandidate,
     HotelSearchResult,
     NearbyAttractionSearchResult,
+    PoiCandidate,
+    RestaurantCandidate,
+    RestaurantSearchAnchor,
+    RestaurantSearchResult,
+    RestaurantSearchSnapshot,
     RouteEstimate,
     RouteEstimateResult,
     RouteLegRequest,
@@ -30,6 +39,12 @@ __all__ = [
     "HotelCandidate",
     "HotelSearchResult",
     "NearbyAttractionSearchResult",
+    "PoiCandidate",
+    "RestaurantCache",
+    "RestaurantCandidate",
+    "RestaurantSearchAnchor",
+    "RestaurantSearchResult",
+    "RestaurantSearchSnapshot",
     "RouteCache",
     "RouteEstimate",
     "RouteEstimateResult",
@@ -38,5 +53,6 @@ __all__ = [
     "RoutePoint",
     "WeatherForecast",
     "WeatherSearchResult",
+    "restaurant_search_cache_key",
     "route_leg_cache_key",
 ]

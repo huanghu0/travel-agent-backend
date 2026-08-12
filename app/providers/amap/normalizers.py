@@ -12,6 +12,15 @@ from app.providers.amap.models import (
     GeoPoint,
     HotelCandidate,
     HotelSearchResult,
+    LocationResolutionResult,
+    PlaceCandidate,
+    PoiCandidate,
+    PoiDetailResult,
+    PoiSearchResult,
+    RestaurantCandidate,
+    RestaurantSearchAnchor,
+    RestaurantSearchResult,
+    RestaurantSearchSnapshot,
     RouteEstimate,
     RouteLegRequest,
     RouteMode,
@@ -20,7 +29,7 @@ from app.providers.amap.models import (
 )
 
 
-CandidateT = TypeVar("CandidateT", AttractionCandidate, HotelCandidate)
+CandidateT = TypeVar("CandidateT", bound=PlaceCandidate)
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -57,6 +66,13 @@ def _nonnegative_number(value: Any) -> float | None:
     return number if number is not None and number >= 0 else None
 
 
+def _nonnegative_int(value: Any) -> int | None:
+    number = _nonnegative_number(value)
+    if number is None:
+        return None
+    return max(0, round(number))
+
+
 def _location(value: Any) -> GeoPoint | None:
     """兼容高德的 '经度,纬度'、数组和对象三种坐标表示。"""
 
@@ -82,8 +98,52 @@ def _location(value: Any) -> GeoPoint | None:
 
 
 def _business_extension(poi: dict[str, Any]) -> dict[str, Any]:
-    value = poi.get("biz_ext")
-    return value if isinstance(value, dict) else {}
+    """兼容 POI v5 的 business 与旧版 v3 的 biz_ext。"""
+
+    for key in ("business", "biz_ext"):
+        value = poi.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _opening_hours(raw: dict[str, Any], business: dict[str, Any]) -> str:
+    return _text(
+        business.get(
+            "opentime_today",
+            business.get(
+                "opentime_week",
+                business.get("opentime", raw.get("opentime", "")),
+            ),
+        )
+    )
+
+
+def _poi_candidate(raw: dict[str, Any]) -> PoiCandidate | None:
+    name = _text(raw.get("name"))
+    address = _text(raw.get("address"))
+    location = _location(raw.get("location"))
+    if not name or location is None:
+        return None
+    business = _business_extension(raw)
+    return PoiCandidate(
+        poi_id=_text(raw.get("id")),
+        name=name,
+        address=address or _text(raw.get("adname")) or "地址待确认",
+        location=location,
+        district=_text(raw.get("adname")),
+        city_code=_text(raw.get("citycode")),
+        adcode=_text(raw.get("adcode")),
+        rating=_rating(business.get("rating", raw.get("rating"))),
+        telephone=_text(raw.get("tel")),
+        category=_text(raw.get("type")),
+        type_code=_text(raw.get("typecode")),
+        opening_hours=_opening_hours(raw, business),
+        average_cost=_nonnegative_number(
+            business.get("cost", raw.get("cost", raw.get("price")))
+        ),
+        distance_meters=_nonnegative_int(raw.get("distance")),
+    )
 
 
 def _dedupe_sort_crop(
@@ -116,6 +176,188 @@ def _dedupe_sort_crop(
     return [candidate for _, candidate in unique[: max(0, limit)]]
 
 
+def normalize_pois(
+    payload: dict[str, Any],
+    *,
+    city: str,
+    keywords: str,
+    types: str,
+    limit: int,
+    center: GeoPoint | None = None,
+    radius_meters: int | None = None,
+) -> PoiSearchResult:
+    """统一处理 POI v5 文本/周边搜索结果。"""
+
+    raw_pois = payload.get("pois")
+    pois = raw_pois if isinstance(raw_pois, list) else []
+    candidates = [
+        candidate
+        for raw in pois
+        if isinstance(raw, dict)
+        for candidate in [_poi_candidate(raw)]
+        if candidate is not None
+    ]
+    return PoiSearchResult(
+        query_city=city,
+        keywords=keywords,
+        types=types,
+        center=center,
+        radius_meters=radius_meters,
+        total_received=len(pois),
+        candidates=_dedupe_sort_crop(candidates, limit=limit),
+    )
+
+
+def normalize_restaurant_snapshot(
+    payload: dict[str, Any],
+    *,
+    city: str,
+    keywords: str,
+    center: GeoPoint,
+    radius_meters: int,
+    page_size: int,
+) -> RestaurantSearchSnapshot:
+    """把一次高德周边查询转成可跨会话缓存的稳定 POI 快照。"""
+
+    pois = payload.get("pois") if isinstance(payload.get("pois"), list) else []
+    candidates = [
+        candidate
+        for raw in pois
+        if isinstance(raw, dict)
+        for candidate in [_poi_candidate(raw)]
+        if candidate is not None
+    ]
+    # 周边餐饮按距离优先去重；评分仅用于相同距离候选的稳定排序。
+    unique: dict[str, PoiCandidate] = {}
+    for candidate in candidates:
+        identity = (candidate.poi_id or f"{candidate.name}|{candidate.address}").lower()
+        existing = unique.get(identity)
+        if existing is None:
+            unique[identity] = candidate
+            continue
+        old_distance = existing.distance_meters if existing.distance_meters is not None else 10**9
+        new_distance = candidate.distance_meters if candidate.distance_meters is not None else 10**9
+        if new_distance < old_distance:
+            unique[identity] = candidate
+    ordered = sorted(
+        unique.values(),
+        key=lambda item: (
+            item.distance_meters if item.distance_meters is not None else 10**9,
+            -(item.rating if item.rating is not None else -1),
+            item.name,
+        ),
+    )
+    return RestaurantSearchSnapshot(
+        query_city=city,
+        keywords=keywords,
+        center=center,
+        radius_meters=radius_meters,
+        page_size=max(1, min(25, page_size)),
+        total_received=len(pois),
+        candidates=ordered[: max(0, page_size)],
+    )
+
+
+def bind_restaurant_snapshot(
+    snapshot: RestaurantSearchSnapshot,
+    *,
+    anchor: RestaurantSearchAnchor,
+    limit: int,
+) -> RestaurantSearchResult:
+    """读取缓存后，把稳定 POI 重新绑定到当前会话的餐次锚点。"""
+
+    candidates = [
+        RestaurantCandidate(
+            **poi.model_dump(),
+            anchor_id=anchor.anchor_id,
+            day_index=anchor.day_index,
+            meal_type=anchor.meal_type,
+        )
+        for poi in snapshot.candidates[: max(0, limit)]
+    ]
+    return RestaurantSearchResult(
+        query_city=snapshot.query_city,
+        keywords=snapshot.keywords,
+        requested_anchors=1,
+        searched_anchors=1,
+        total_received=snapshot.total_received,
+        candidates=candidates,
+    )
+
+
+def normalize_restaurants(
+    payload: dict[str, Any],
+    *,
+    city: str,
+    keywords: str,
+    anchor: RestaurantSearchAnchor,
+    limit: int,
+) -> RestaurantSearchResult:
+    """兼容旧调用：先创建稳定快照，再绑定到具体餐次锚点。"""
+
+    snapshot = normalize_restaurant_snapshot(
+        payload,
+        city=city,
+        keywords=keywords,
+        center=anchor.location,
+        radius_meters=3000,
+        page_size=max(1, limit),
+    )
+    return bind_restaurant_snapshot(snapshot, anchor=anchor, limit=limit)
+
+def normalize_poi_detail(payload: dict[str, Any], *, poi_id: str) -> PoiDetailResult:
+    """POI 详情不存在时返回 found=false，而不是制造不完整地点。"""
+
+    pois = payload.get("pois") if isinstance(payload.get("pois"), list) else []
+    candidate = next(
+        (
+            normalized
+            for item in pois
+            if isinstance(item, dict)
+            for normalized in [_poi_candidate(item)]
+            if normalized is not None
+        ),
+        None,
+    )
+    return PoiDetailResult(
+        poi_id=poi_id,
+        found=candidate is not None,
+        candidate=candidate,
+    )
+
+
+def normalize_geocode_location(
+    payload: dict[str, Any], *, query: str, city: str
+) -> LocationResolutionResult:
+    """把地理编码首个有效结果转成统一地点解析输出。"""
+
+    geocodes = payload.get("geocodes") if isinstance(payload.get("geocodes"), list) else []
+    for raw in geocodes:
+        if not isinstance(raw, dict):
+            continue
+        location = _location(raw.get("location"))
+        if location is None:
+            continue
+        candidate = PoiCandidate(
+            name=query,
+            address=_text(raw.get("formatted_address")) or query,
+            location=location,
+            district=_text(raw.get("district")),
+            city_code=_text(raw.get("citycode")),
+            adcode=_text(raw.get("adcode")),
+            category="geocode",
+        )
+        return LocationResolutionResult(
+            query=query,
+            city=city,
+            resolved=True,
+            source="geocode",
+            confidence=0.72,
+            candidate=candidate,
+        )
+    return LocationResolutionResult(query=query, city=city)
+
+
 def normalize_attractions(
     payload: dict[str, Any],
     *,
@@ -144,9 +386,7 @@ def normalize_attractions(
                 address=address,
                 location=location,
                 category=_text(raw.get("type")),
-                opening_hours=_text(
-                    biz_ext.get("opentime", raw.get("opentime", ""))
-                ),
+                opening_hours=_opening_hours(raw, biz_ext),
                 district=_text(raw.get("adname")),
                 city_code=_text(raw.get("citycode")),
                 adcode=_text(raw.get("adcode")),
@@ -260,13 +500,6 @@ def normalize_weather(
         forecasts=forecasts[: max(0, limit)],
     )
 
-
-
-def _nonnegative_int(value: Any) -> int | None:
-    number = _nonnegative_number(value)
-    if number is None:
-        return None
-    return max(0, round(number))
 
 
 def normalize_city_code(payload: dict[str, Any]) -> str:

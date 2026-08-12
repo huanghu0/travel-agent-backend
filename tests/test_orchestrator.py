@@ -13,7 +13,11 @@ from app.agent_runtime import (
     ValidationSeverity,
 )
 from app.constraints import ConstraintEvaluator, constraint_plan_fingerprint
-from app.plan_content import plan_content_source_fingerprint
+from app.core.config import settings
+from app.plan_content import (
+    plan_content_source_fingerprint,
+    restaurant_search_source_fingerprint,
+)
 from app.routing import plan_route_fingerprint
 from app.schemas.trip_schema import TripPlan, TripPlanResponse, TripRequest
 from app.scheduling import ScheduleTimelineEvaluator
@@ -190,6 +194,7 @@ class TripOrchestratorTests(unittest.TestCase):
                 AgentAction.GENERATE_PLAN,
                 AgentAction.ESTIMATE_ROUTES,
                 AgentAction.EVALUATE_COMMUTE,
+                AgentAction.SEARCH_RESTAURANTS,
                 AgentAction.REBUILD_PLAN_CONTENT,
                 AgentAction.EVALUATE_CONSTRAINTS,
                 AgentAction.VALIDATE_PLAN,
@@ -207,23 +212,27 @@ class TripOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(state.status, "completed")
         self.assertTrue(state.finished)
-        # 5 个外部/LLM 根动作之后，后续确定性动作被合并到第 5 个物理步骤。
-        self.assertEqual(state.current_step, 5)
-        self.assertEqual(state.local_action_batch_count, 1)
+        # 路线查询先压缩通勤评估，随后真实餐饮查询成为新的外部根动作；
+        # 内容重建、约束、校验和完成被压缩到餐饮查询步骤。
+        self.assertEqual(state.current_step, 6)
+        self.assertEqual(state.local_action_batch_count, 2)
         self.assertEqual(state.compressed_local_action_count, 5)
-        route_record = state.action_history[4]
         self.assertEqual(
-            route_record.compressed_actions,
+            state.action_history[4].compressed_actions,
+            [AgentAction.EVALUATE_COMMUTE],
+        )
+        restaurant_record = state.action_history[6]
+        self.assertEqual(
+            restaurant_record.compressed_actions,
             [
-                AgentAction.EVALUATE_COMMUTE,
                 AgentAction.REBUILD_PLAN_CONTENT,
                 AgentAction.EVALUATE_CONSTRAINTS,
                 AgentAction.VALIDATE_PLAN,
                 AgentAction.FINISH,
             ],
         )
-        self.assertTrue(all(record.step == 5 for record in state.action_history[5:]))
-        self.assertTrue(all(record.compressed for record in state.action_history[5:]))
+        self.assertTrue(all(record.step == 6 for record in state.action_history[7:]))
+        self.assertTrue(all(record.compressed for record in state.action_history[7:]))
         self.assertEqual(state.session_id, "session-test")
         self.assertEqual(state.trip_plan.city, "成都")
         self.assertTrue(state.last_validation_result.valid)
@@ -259,23 +268,30 @@ class TripOrchestratorTests(unittest.TestCase):
 
         state = orchestrator.run(make_request())
 
-        self.assertEqual(state.current_step, 6)
-        self.assertEqual(state.local_action_batch_count, 2)
+        self.assertEqual(state.current_step, 7)
+        self.assertEqual(state.local_action_batch_count, 3)
         self.assertEqual(state.compressed_local_action_count, 4)
         self.assertEqual(
             state.action_history[4].compressed_actions,
-            [AgentAction.EVALUATE_COMMUTE, AgentAction.REBUILD_PLAN_CONTENT],
+            [AgentAction.EVALUATE_COMMUTE],
+        )
+        self.assertEqual(
+            state.action_history[6].compressed_actions,
+            [AgentAction.REBUILD_PLAN_CONTENT, AgentAction.EVALUATE_CONSTRAINTS],
         )
         constraint_record = next(
             record
             for record in state.action_history
             if record.action is AgentAction.EVALUATE_CONSTRAINTS
         )
-        self.assertFalse(constraint_record.compressed)
-        self.assertEqual(
-            constraint_record.compressed_actions,
-            [AgentAction.VALIDATE_PLAN, AgentAction.FINISH],
+        self.assertTrue(constraint_record.compressed)
+        validate_record = next(
+            record
+            for record in state.action_history
+            if record.action is AgentAction.VALIDATE_PLAN
         )
+        self.assertFalse(validate_record.compressed)
+        self.assertEqual(validate_record.compressed_actions, [AgentAction.FINISH])
 
     def test_compressed_actions_preserve_convergence_records(self):
         orchestrator, _, _ = make_orchestrator()
@@ -357,6 +373,20 @@ class TripOrchestratorTests(unittest.TestCase):
         state.schedule_optimization_status = "skipped"
         self.assertEqual(
             TripOrchestrator.decide_next_action(state),
+            AgentAction.SEARCH_RESTAURANTS,
+        )
+        state.restaurants = {
+            "provider": "amap",
+            "query_city": state.request.city,
+            "keywords": "餐厅",
+            "candidates": [],
+        }
+        state.restaurant_plan_fingerprint = restaurant_search_source_fingerprint(
+            state.trip_plan,
+            max_anchors=settings.AMAP_MAX_RESTAURANT_SEARCH_ANCHORS,
+        )
+        self.assertEqual(
+            TripOrchestrator.decide_next_action(state),
             AgentAction.REBUILD_PLAN_CONTENT,
         )
         state.plan_consistency_fingerprint = plan_content_source_fingerprint(
@@ -364,6 +394,7 @@ class TripOrchestratorTests(unittest.TestCase):
             state.trip_plan,
             state.route_estimates,
             state.schedule_quality_report,
+            state.restaurants,
         )
         self.assertEqual(
             TripOrchestrator.decide_next_action(state),
@@ -419,6 +450,7 @@ class TripOrchestratorTests(unittest.TestCase):
                 AgentAction.GENERATE_PLAN,
                 AgentAction.ESTIMATE_ROUTES,
                 AgentAction.EVALUATE_COMMUTE,
+                AgentAction.SEARCH_RESTAURANTS,
                 AgentAction.REBUILD_PLAN_CONTENT,
                 AgentAction.EVALUATE_CONSTRAINTS,
                 AgentAction.VALIDATE_PLAN,
@@ -451,7 +483,7 @@ class TripOrchestratorTests(unittest.TestCase):
         )
         self.assertTrue(failed_validation.compressed)
         self.assertEqual(
-            failed_validation.batch_root_action, AgentAction.ESTIMATE_ROUTES
+            failed_validation.batch_root_action, AgentAction.SEARCH_RESTAURANTS
         )
         self.assertFalse(repair_record.compressed)
         self.assertGreater(repair_record.step, failed_validation.step)
@@ -489,7 +521,7 @@ class TripOrchestratorTests(unittest.TestCase):
         self.assertFalse(failed_validation.success)
         self.assertTrue(failed_validation.compressed)
         self.assertEqual(
-            failed_validation.batch_root_action, AgentAction.ESTIMATE_ROUTES
+            failed_validation.batch_root_action, AgentAction.SEARCH_RESTAURANTS
         )
 
     def test_failed_tool_result_is_retried(self):

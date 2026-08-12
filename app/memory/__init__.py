@@ -13,6 +13,7 @@ from app.memory.models import (
     QualityDimensionBaseline,
     QualityIssueStats,
 )
+from app.memory.sqlite_restaurant_cache import SQLiteRestaurantCache
 from app.memory.sqlite_route_cache import SQLiteRouteCache
 from app.memory.sqlite_store import SessionNotFoundError, SQLiteAgentStateStore
 
@@ -30,5 +31,6 @@ __all__ = [
     "QualityIssueStats",
     "SessionNotFoundError",
     "SQLiteAgentStateStore",
+    "SQLiteRestaurantCache",
     "SQLiteRouteCache",
 ]

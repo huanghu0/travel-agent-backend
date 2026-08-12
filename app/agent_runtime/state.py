@@ -31,7 +31,7 @@ from app.tools.models import ActionResult, ToolErrorType
 from app.validation import TripValidationResult
 
 
-CURRENT_AGENT_STATE_VERSION = 15
+CURRENT_AGENT_STATE_VERSION = 16
 
 
 def utc_now() -> datetime:
@@ -80,6 +80,7 @@ class AgentAction(str, Enum):
     SEARCH_ATTRACTIONS = "search_attractions"
     GET_WEATHER = "get_weather"
     SEARCH_HOTELS = "search_hotels"
+    SEARCH_RESTAURANTS = "search_restaurants"
     GENERATE_PLAN = "generate_plan"
     VALIDATE_PLAN = "validate_plan"
     ESTIMATE_ROUTES = "estimate_routes"
@@ -339,6 +340,9 @@ class AgentState(BaseModel):
     attractions: dict[str, Any] | None = None
     weather: dict[str, Any] | None = None
     hotels: dict[str, Any] | None = None
+    # 最终行程锚点周边的真实高德餐厅候选。
+    restaurants: dict[str, Any] | None = None
+    restaurant_plan_fingerprint: str | None = None
     trip_plan: TripPlan | None = None
     route_estimates: dict[str, Any] | None = None
     route_plan_fingerprint: str | None = None

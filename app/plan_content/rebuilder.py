@@ -8,7 +8,16 @@ import math
 from collections import defaultdict
 from typing import Any
 
-from app.providers.amap.models import RouteEstimate, RouteEstimateResult
+from app.providers.amap.models import (
+    RestaurantCandidate,
+    RestaurantSearchResult,
+    RouteEstimate,
+    RouteEstimateResult,
+)
+from app.plan_content.restaurant_hours import (
+    meal_service_intervals,
+    opening_status_for_interval,
+)
 from app.routing.plan_routes import normalize_transportation_mode, resolve_day_hotels
 from app.schemas.trip_schema import Budget, Hotel, Meal, TripPlan, TripRequest
 from app.scheduling import ScheduleQualityReport
@@ -24,6 +33,7 @@ def plan_content_source_fingerprint(
     plan: TripPlan,
     route_estimates: RouteEstimateResult | dict[str, Any] | None,
     schedule_quality_report: ScheduleQualityReport | dict[str, Any] | None = None,
+    restaurants: RestaurantSearchResult | dict[str, Any] | None = None,
 ) -> str:
     """只对决定重建描述和总费用的源字段生成指纹。
 
@@ -32,6 +42,7 @@ def plan_content_source_fingerprint(
 
     routes = _route_result(route_estimates)
     schedule = _schedule_report(schedule_quality_report)
+    restaurant_result = _restaurant_result(restaurants)
     payload = {
         "request": {
             "city": request.city,
@@ -73,11 +84,30 @@ def plan_content_source_fingerprint(
             }
             for item in (routes.routes if routes is not None else [])
         ],
+        "restaurants": (
+            restaurant_result.model_dump(mode="json")
+            if restaurant_result is not None
+            else None
+        ),
         "schedule": (
             {
                 "infeasible_days": schedule.infeasible_days,
                 "total_overtime_minutes": schedule.total_overtime_minutes,
                 "total_transportation_minutes": schedule.total_transportation_minutes,
+                "days": [
+                    {
+                        "day_index": day.day_index,
+                        "timeline": [
+                            {
+                                "item_type": item.item_type,
+                                "start_time": item.start_time,
+                                "end_time": item.end_time,
+                            }
+                            for item in day.timeline
+                        ],
+                    }
+                    for day in schedule.days
+                ],
             }
             if schedule is not None
             else None
@@ -102,9 +132,17 @@ class TripPlanConsistencyRebuilder:
         *,
         route_estimates: RouteEstimateResult | dict[str, Any] | None,
         schedule_quality_report: ScheduleQualityReport | dict[str, Any] | None = None,
+        restaurants: RestaurantSearchResult | dict[str, Any] | None = None,
     ) -> TripPlan:
         rebuilt = plan.model_copy(deep=True)
         route_result = _route_result(route_estimates)
+        schedule = _schedule_report(schedule_quality_report)
+        restaurant_result = _restaurant_result(restaurants)
+        schedule_by_day = (
+            {day.day_index: day for day in schedule.days}
+            if schedule is not None
+            else {}
+        )
         routes_by_day: dict[int, list[RouteEstimate]] = defaultdict(list)
         if route_result is not None:
             for route in route_result.routes:
@@ -131,6 +169,9 @@ class TripPlanConsistencyRebuilder:
             day.meals = self._build_meals(
                 request,
                 day.attractions,
+                day_index=day_index,
+                restaurant_result=restaurant_result,
+                schedule_day=schedule_by_day.get(day_index),
                 start_hotel=start_hotel,
                 return_hotel=return_hotel,
             )
@@ -206,9 +247,14 @@ class TripPlanConsistencyRebuilder:
         request: TripRequest,
         attractions: list[Any],
         *,
+        day_index: int,
+        restaurant_result: RestaurantSearchResult | None,
+        schedule_day: Any | None,
         start_hotel: Hotel | None,
         return_hotel: Hotel | None,
     ) -> list[Meal]:
+        """优先选择真实高德餐厅，缺失餐次才回退到附近餐饮描述。"""
+
         middle = attractions[len(attractions) // 2] if attractions else None
         last = attractions[-1] if attractions else None
         breakfast_anchor = start_hotel or middle
@@ -219,23 +265,104 @@ class TripPlanConsistencyRebuilder:
             "lunch": lunch_anchor,
             "dinner": dinner_anchor,
         }
-        labels = {"breakfast": "\u65e9\u9910", "lunch": "\u5348\u9910", "dinner": "\u665a\u9910"}
+        labels = {"breakfast": "早餐", "lunch": "午餐", "dinner": "晚餐"}
+        service_intervals = meal_service_intervals(schedule_day)
+        candidates_by_meal: dict[str, list[RestaurantCandidate]] = defaultdict(list)
+        if restaurant_result is not None:
+            for candidate in restaurant_result.candidates:
+                if candidate.day_index == day_index:
+                    candidates_by_meal[candidate.meal_type].append(candidate)
+
         meals: list[Meal] = []
+        used_restaurants: set[str] = set()
         for meal_type in ("breakfast", "lunch", "dinner"):
+            interval = service_intervals[meal_type]
+            ranked: list[tuple[int, RestaurantCandidate, str]] = []
+            for candidate in candidates_by_meal.get(meal_type, []):
+                identity = candidate.poi_id or f"{candidate.name}|{candidate.address}"
+                if identity in used_restaurants:
+                    continue
+                status = opening_status_for_interval(
+                    candidate.opening_hours,
+                    interval.start_minute,
+                    interval.end_minute,
+                )
+                # 明确关闭的候选不进入选择集合；未知营业时间作为次优降级候选。
+                if status == "closed":
+                    continue
+                ranked.append((0 if status == "open" else 1, candidate, status))
+            ranked.sort(
+                key=lambda item: (
+                    item[0],
+                    item[1].distance_meters
+                    if item[1].distance_meters is not None
+                    else 10**9,
+                    -(item[1].rating if item[1].rating is not None else -1),
+                    item[1].name,
+                )
+            )
+            selected_item = ranked[0] if ranked else None
+            if selected_item is not None:
+                _, selected, opening_status = selected_item
+                identity = selected.poi_id or f"{selected.name}|{selected.address}"
+                used_restaurants.add(identity)
+                estimated_cost = (
+                    max(0, round(selected.average_cost))
+                    if selected.average_cost is not None
+                    else _MEAL_COSTS[meal_type]
+                )
+                distance = (
+                    f"，距行程锚点约{selected.distance_meters}米"
+                    if selected.distance_meters is not None
+                    else ""
+                )
+                hours_note = (
+                    "营业时间覆盖预计用餐时段"
+                    if opening_status == "open"
+                    else "营业时间未知，出发前请再次确认"
+                )
+                meals.append(
+                    Meal(
+                        type=meal_type,
+                        name=selected.name,
+                        address=selected.address,
+                        location=selected.location.model_dump(),
+                        description=f"高德真实餐饮候选{distance}；{hours_note}。",
+                        estimated_cost=estimated_cost,
+                        poi_id=selected.poi_id,
+                        rating=selected.rating,
+                        telephone=selected.telephone,
+                        category=selected.category,
+                        opening_hours=selected.opening_hours,
+                        source="amap",
+                        planned_start_time=interval.start_time,
+                        planned_end_time=interval.end_time,
+                        opening_status=opening_status,
+                    )
+                )
+                continue
+
             anchor = anchors[meal_type]
-            anchor_name = anchor.name if anchor is not None else f"{request.city}\u5e02\u533a"
+            anchor_name = anchor.name if anchor is not None else f"{request.city}市区"
             meals.append(
                 Meal(
                     type=meal_type,
-                    name=f"{anchor_name}\u9644\u8fd1{labels[meal_type]}",
+                    name=f"{anchor_name}附近{labels[meal_type]}",
                     address=(getattr(anchor, "address", None) if anchor is not None else None),
                     location=(
                         anchor.location.model_copy(deep=True)
                         if anchor is not None and anchor.location is not None
                         else None
                     ),
-                    description=f"\u56f4\u7ed5\u5f53\u5929\u5b9e\u9645\u5730\u70b9\u5b89\u6392{labels[meal_type]}\uff0c\u4f18\u5148\u9009\u62e9\u6b65\u884c\u53ef\u8fbe\u4e14\u660e\u7801\u6807\u4ef7\u7684\u9910\u9986\u3002",
+                    description=(
+                        f"未获得营业时间匹配的真实餐厅，围绕当天实际地点安排"
+                        f"{labels[meal_type]}，到店前确认营业状态。"
+                    ),
                     estimated_cost=_MEAL_COSTS[meal_type],
+                    source="fallback",
+                    planned_start_time=interval.start_time,
+                    planned_end_time=interval.end_time,
+                    opening_status="fallback",
                 )
             )
         return meals
@@ -309,6 +436,18 @@ def _route_result(
     if value is None:
         return None
     return value if isinstance(value, RouteEstimateResult) else RouteEstimateResult.model_validate(value)
+
+
+def _restaurant_result(
+    value: RestaurantSearchResult | dict[str, Any] | None,
+) -> RestaurantSearchResult | None:
+    if value is None:
+        return None
+    return (
+        value
+        if isinstance(value, RestaurantSearchResult)
+        else RestaurantSearchResult.model_validate(value)
+    )
 
 
 def _schedule_report(

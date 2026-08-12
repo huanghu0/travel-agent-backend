@@ -145,7 +145,7 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         self.assertEqual(len(recording_store.snapshots), state.current_step + 1)
         self.assertEqual(
             [len(item.action_history) for item in recording_store.snapshots],
-            [0, 1, 2, 3, 4, 10],
+            [0, 1, 2, 3, 4, 6, 11],
         )
         self.assertEqual(recording_store.snapshots[0].status, "running")
         self.assertEqual(recording_store.snapshots[-1].status, "completed")
@@ -158,7 +158,7 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
 
         self.assertEqual(loaded, state)
         self.assertEqual(loaded.status, "completed")
-        self.assertEqual(len(loaded.action_history), 10)
+        self.assertEqual(len(loaded.action_history), 11)
         self.assertEqual(loaded.action_history[-1].action, AgentAction.FINISH)
         self.assertIsNotNone(loaded.created_at.tzinfo)
         self.assertIsNotNone(loaded.updated_at.tzinfo)
@@ -182,17 +182,18 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         )
         route_record = loaded.action_history[4]
         compressed_records = [
-            record for record in loaded.action_history if record.compressed
+            record
+            for record in loaded.action_history
+            if record.compressed
+            and record.batch_root_action is AgentAction.ESTIMATE_ROUTES
         ]
         self.assertEqual(
             route_record.compressed_actions,
             [record.action for record in compressed_records],
         )
-        self.assertTrue(
-            all(
-                record.batch_root_action is AgentAction.ESTIMATE_ROUTES
-                for record in compressed_records
-            )
+        self.assertEqual(
+            route_record.compressed_actions,
+            [AgentAction.EVALUATE_COMMUTE],
         )
         self.assertEqual(
             [record.batch_index for record in compressed_records],
