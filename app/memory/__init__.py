@@ -8,6 +8,10 @@ from app.memory.models import (
     CityExecutionBaseline,
     ExecutionAggregate,
     ExecutionBaselineReport,
+    QualityAggregate,
+    QualityBaselineReport,
+    QualityDimensionBaseline,
+    QualityIssueStats,
 )
 from app.memory.sqlite_route_cache import SQLiteRouteCache
 from app.memory.sqlite_store import SessionNotFoundError, SQLiteAgentStateStore
@@ -20,6 +24,10 @@ __all__ = [
     "CityExecutionBaseline",
     "ExecutionAggregate",
     "ExecutionBaselineReport",
+    "QualityAggregate",
+    "QualityBaselineReport",
+    "QualityDimensionBaseline",
+    "QualityIssueStats",
     "SessionNotFoundError",
     "SQLiteAgentStateStore",
     "SQLiteRouteCache",

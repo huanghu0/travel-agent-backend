@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -13,9 +15,15 @@ from app.agent_runtime import (
 )
 from app.agents import PlannerAgent
 from app.core.config import settings
+from app.evaluation import (
+    AcceptanceScenario,
+    FIXED_ACCEPTANCE_SCENARIOS,
+    FixedAcceptanceBaselineReport,
+)
 from app.memory import (
     AgentSessionSummary,
     ExecutionBaselineReport,
+    QualityBaselineReport,
     SessionNotFoundError,
     SQLiteAgentStateStore,
     SQLiteRouteCache,
@@ -307,6 +315,63 @@ def get_execution_baseline(
         top_n=top_n,
         max_cycle_span=max_cycle_span,
     )
+
+
+@app.get(
+    "/api/agent/analytics/quality-baseline",
+    summary="查询部分完成与执行质量基线",
+    response_model=QualityBaselineReport,
+)
+def get_quality_baseline(
+    limit: int = Query(default=1000, ge=1, le=5000),
+    status: AgentStatus | None = Query(default=None),
+    city: str | None = Query(default=None, min_length=1, max_length=100),
+    travel_days: int | None = Query(default=None, ge=1, le=30),
+    transportation: str | None = Query(default=None, min_length=1, max_length=100),
+    completion_mode: Literal["full", "partial"] | None = Query(default=None),
+    quality_level: Literal[
+        "excellent", "acceptable", "degraded", "unusable"
+    ]
+    | None = Query(default=None),
+    top_n: int = Query(default=20, ge=1, le=100),
+):
+    """统计完整/部分完成率、质量分、警告代码以及工具和 LLM 消耗。"""
+
+    # 只读取 SQLite 检查点；该接口不会触发新的旅行规划或外部 API 调用。
+    return agent_state_store.get_quality_baseline(
+        limit=limit,
+        status=status,
+        city=city,
+        travel_days=travel_days,
+        transportation=transportation,
+        completion_mode=completion_mode,
+        quality_level=quality_level,
+        top_n=top_n,
+    )
+
+
+@app.get(
+    "/api/agent/analytics/fixed-acceptance-scenarios",
+    summary="查询固定端到端验收场景",
+    response_model=list[AcceptanceScenario],
+)
+def list_fixed_acceptance_scenarios():
+    """返回五城市、1/3/5 日和三类交通方式的固定请求清单。"""
+
+    return FIXED_ACCEPTANCE_SCENARIOS
+
+
+@app.get(
+    "/api/agent/analytics/fixed-acceptance-baseline",
+    summary="查询固定端到端验收覆盖率和通过率",
+    response_model=FixedAcceptanceBaselineReport,
+)
+def get_fixed_acceptance_baseline(
+    limit: int = Query(default=5000, ge=1, le=10000),
+):
+    """用每个固定场景最近一次匹配会话执行离线确定性验收。"""
+
+    return agent_state_store.get_fixed_acceptance_baseline(limit=limit)
 
 
 @app.get(
