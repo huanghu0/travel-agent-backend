@@ -1,4 +1,4 @@
-﻿"""确定性智能体运行时抛出的异常类型。"""
+"""确定性智能体运行时抛出的异常类型。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,10 @@ class AgentRuntimeError(RuntimeError):
     def __init__(self, message: str, state: AgentState):
         super().__init__(message)
         self.state = state
+
+
+class AgentCheckpointError(AgentRuntimeError):
+    """SQLite 检查点在有限重试后仍无法持久化。"""
 
 
 class AgentActionError(AgentRuntimeError):

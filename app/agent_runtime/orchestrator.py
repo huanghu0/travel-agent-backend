@@ -9,6 +9,7 @@ from app.agent_runtime.acceptance import (
     DEFAULT_ALLOWED_PARTIAL_ERROR_CODES,
     PartialAcceptancePolicy,
 )
+from app.agent_runtime.checkpoint_policy import CheckpointPolicy
 from app.agent_runtime.convergence import (
     action_input_fingerprint,
     business_state_fingerprint,
@@ -21,6 +22,7 @@ from app.agent_runtime.convergence import (
 from app.agent_runtime.exceptions import (
     AgentActionError,
     AgentBudgetExceededError,
+    AgentCheckpointError,
     AgentConvergenceError,
     AgentMaxStepsError,
 )
@@ -225,6 +227,10 @@ class TripOrchestrator:
         execution_policy: ExecutionPolicy | None = None,
         circuit_breaker: CircuitBreaker | None = None,
         state_store: AgentStateStore | None = None,
+        checkpoint_policy: CheckpointPolicy | None = None,
+        checkpoint_max_attempts: int = 3,
+        checkpoint_retry_base_delay_seconds: float = 0.05,
+        checkpoint_retry_max_delay_seconds: float = 0.5,
     ):
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -294,6 +300,8 @@ class TripOrchestrator:
             raise ValueError("max_duration_seconds must be positive")
         if max_tool_calls < 0 or max_llm_calls < 0:
             raise ValueError("call budgets cannot be negative")
+        if checkpoint_max_attempts < 1:
+            raise ValueError("checkpoint_max_attempts must be at least 1")
 
         if tool_registry is None:
             if planner_agent is None:
@@ -427,6 +435,12 @@ class TripOrchestrator:
         self.max_tool_calls = max_tool_calls
         self.max_llm_calls = max_llm_calls
         self.state_store = state_store
+        # 检查点使用独立的有限重试策略，避免 SQLite 短暂锁竞争中断整个会话。
+        self.checkpoint_policy = checkpoint_policy or CheckpointPolicy(
+            max_attempts=checkpoint_max_attempts,
+            base_delay_seconds=checkpoint_retry_base_delay_seconds,
+            max_delay_seconds=checkpoint_retry_max_delay_seconds,
+        )
         self.execution_policy = execution_policy or ExecutionPolicy(
             tool_registry,
             retry_base_delay_seconds=retry_base_delay_seconds,
@@ -3298,8 +3312,18 @@ class TripOrchestrator:
         """更新时间戳，并把当前完整状态保存为可恢复检查点。"""
 
         state.touch()
-        if self.state_store is not None:
-            self.state_store.save_state(state)
+        if self.state_store is None:
+            return
+        try:
+            self.checkpoint_policy.save(self.state_store, state)
+        except Exception as exc:
+            # 持久化失败不能被伪装成业务成功；保留内存态供 API 和验收测试诊断。
+            message = f"状态检查点持久化失败: {self._safe_error_message(exc)}"
+            state.status = "failed"
+            if not state.errors or state.errors[-1] != message:
+                state.errors.append(message)
+            state.touch()
+            raise AgentCheckpointError(message, state) from exc
 
     @staticmethod
     def _safe_error_message(exc: Exception) -> str:

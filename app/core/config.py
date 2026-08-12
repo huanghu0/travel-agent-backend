@@ -224,6 +224,17 @@ class Settings:
     AGENT_MAX_LLM_CALLS: int = int(
         _env("AGENT_MAX_LLM_CALLS", "6") or "6"
     )
+    # SQLite 检查点锁竞争采用独立的小延迟重试，不消耗工具调用预算。
+    AGENT_CHECKPOINT_MAX_ATTEMPTS: int = int(
+        _env("AGENT_CHECKPOINT_MAX_ATTEMPTS", "3") or "3"
+    )
+    AGENT_CHECKPOINT_RETRY_BASE_DELAY_SECONDS: float = float(
+        _env("AGENT_CHECKPOINT_RETRY_BASE_DELAY_SECONDS", "0.05") or "0.05"
+    )
+    AGENT_CHECKPOINT_RETRY_MAX_DELAY_SECONDS: float = float(
+        _env("AGENT_CHECKPOINT_RETRY_MAX_DELAY_SECONDS", "0.5") or "0.5"
+    )
+
     AGENT_RETRY_BASE_DELAY_SECONDS: float = float(
         _env("AGENT_RETRY_BASE_DELAY_SECONDS", "0.5") or "0.5"
     )

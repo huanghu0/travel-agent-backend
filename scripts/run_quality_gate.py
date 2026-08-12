@@ -1,4 +1,4 @@
-﻿"""本地和 CI 共用的确定性质量门。"""
+"""本地和 CI 共用的确定性质量门。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ def _run(command: list[str]) -> int:
 def main() -> int:
     commands = [
         [sys.executable, "-m", "compileall", "-q", "app", "tests", "scripts", "main.py"],
+        [sys.executable, "scripts/run_orchestrator_fault_recovery.py"],
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
         [
             sys.executable,

@@ -5,9 +5,14 @@ from app.agent_runtime.acceptance import (
     PartialAcceptanceReport,
     PlanQualityLevel,
 )
+from app.agent_runtime.checkpoint_policy import (
+    CheckpointPolicy,
+    CheckpointRetryEvent,
+)
 from app.agent_runtime.exceptions import (
     AgentActionError,
     AgentBudgetExceededError,
+    AgentCheckpointError,
     AgentConvergenceError,
     AgentMaxStepsError,
     AgentRuntimeError,
@@ -50,11 +55,14 @@ __all__ = [
     "AgentAction",
     "AgentActionError",
     "AgentBudgetExceededError",
+    "AgentCheckpointError",
     "AgentConvergenceError",
     "AgentMaxStepsError",
     "AgentRuntimeError",
     "AgentState",
     "AgentStatus",
+    "CheckpointPolicy",
+    "CheckpointRetryEvent",
     "CircuitBreaker",
     "CircuitState",
     "CommuteOptimizationStatus",

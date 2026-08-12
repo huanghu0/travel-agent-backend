@@ -7,6 +7,7 @@ from starlette.concurrency import run_in_threadpool
 from app.agent_runtime import (
     AgentActionError,
     AgentBudgetExceededError,
+    AgentCheckpointError,
     AgentConvergenceError,
     AgentMaxStepsError,
     AgentState,
@@ -181,6 +182,13 @@ trip_orchestrator = TripOrchestrator(
     circuit_failure_threshold=settings.AGENT_CIRCUIT_FAILURE_THRESHOLD,
     circuit_recovery_timeout_seconds=settings.AGENT_CIRCUIT_RECOVERY_TIMEOUT_SECONDS,
     state_store=agent_state_store,
+    checkpoint_max_attempts=settings.AGENT_CHECKPOINT_MAX_ATTEMPTS,
+    checkpoint_retry_base_delay_seconds=(
+        settings.AGENT_CHECKPOINT_RETRY_BASE_DELAY_SECONDS
+    ),
+    checkpoint_retry_max_delay_seconds=(
+        settings.AGENT_CHECKPOINT_RETRY_MAX_DELAY_SECONDS
+    ),
 )
 
 
@@ -283,6 +291,8 @@ async def generate_trip_plan(request: TripRequest):
             warnings=state.completion_warnings,
         )
     # 步骤 3：把运行时异常转换成前端容易定位的 HTTP 错误。
+    except AgentCheckpointError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AgentBudgetExceededError as exc:
         # 时间、工具调用或 LLM 调用预算耗尽，属于暂时不可用。
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -426,6 +436,8 @@ def resume_trip_session(session_id: str):
         return trip_orchestrator.resume(state)
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AgentCheckpointError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AgentBudgetExceededError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AgentActionError as exc:

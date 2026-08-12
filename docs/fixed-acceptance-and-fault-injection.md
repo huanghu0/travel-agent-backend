@@ -1,4 +1,4 @@
-﻿# 固定验收样本与故障注入
+# 固定验收样本与故障注入
 
 ## 1. 目标
 
@@ -129,9 +129,10 @@ python scripts/run_quality_gate.py
 质量门依次执行：
 
 1. Python 编译检查
-2. 全量单元测试和故障注入测试
-3. 15 个固定样本 manifest 校验和离线回放
-4. 15/15 覆盖且没有失败场景才返回退出码 0
+2. 完整 Orchestrator 六类故障恢复验收
+3. 全量单元测试和故障注入测试
+4. 15 个固定样本 manifest 校验和离线回放
+5. 六类故障场景和 15/15 固定样本全部通过时才返回退出码 0
 
 GitHub Actions 配置位于：
 
@@ -139,7 +140,39 @@ GitHub Actions 配置位于：
 .github/workflows/quality-gate.yml
 ```
 
-## 8. 后续维护
+## 8. 完整 Orchestrator 故障恢复验收
+
+完整验收位于：
+
+```text
+app/evaluation/orchestrator_faults.py
+tests/test_orchestrator_fault_recovery.py
+scripts/run_orchestrator_fault_recovery.py
+```
+
+该套件使用真实 `TripOrchestrator`、`ExecutionPolicy`、`ToolRegistry`、SQLite 检查点、校验器和确定性优化器，只替换高德与 Planner 外部边界，不访问网络，也不读取真实 API Key。
+
+固定覆盖六类故障：
+
+1. 景点查询首次超时，第二次调用恢复。
+2. 酒店查询首次 429，保留限流语义且熔断器不误打开。
+3. Planner 首次返回无效结构，在 `generate_plan` 原动作重试，不错误进入 `repair_plan`。
+4. 鉴权失败不可重试，立即安全失败，不继续天气、酒店或 LLM 调用。
+5. SQLite 第二次保存短暂锁定，由独立检查点策略有限重试，且不重复已完成工具。
+6. 一条真实路线分段超时，保留其他成功分段，并由确定性路线重排后重新查询恢复。
+
+SQLite 检查点只重试 `database is locked` 和 `database is busy`。连续三次仍失败时抛出 `AgentCheckpointError`，接口返回 503；其他 `OperationalError` 不重试，避免掩盖表结构或 SQL 错误。
+
+单独运行：
+
+```powershell
+python scripts/run_orchestrator_fault_recovery.py
+python -m unittest tests.test_orchestrator_fault_recovery -v
+```
+
+验收要求：故障必须真实触发；可恢复场景最终完成并可从 SQLite 恢复；不可恢复场景必须进入明确终态；步骤、工具和 LLM 预算不能越界；已完成会话再次 `resume()` 不产生外部调用。
+
+## 9. 后续维护
 
 - `synthetic` 样本负责验证框架，不能替代真实端到端回归。
 - 高德或 LLM 协议发生变化时，应在稳定环境重新录制 `live` 样本。

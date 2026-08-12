@@ -27,7 +27,7 @@ from app.providers.amap.models import (
 )
 from app.schemas.trip_schema import TripPlan, TripRequest
 from app.tools.models import ToolErrorType
-from app.tools.registry import ToolDefinition, ToolRegistry, ToolResultError
+from app.tools.registry import CallInjector, ToolDefinition, ToolRegistry, ToolResultError
 from app.validation import TripValidationResult
 
 
@@ -174,6 +174,7 @@ def build_trip_tool_registry(
     attraction_agent: Any | None = None,
     weather_agent: Any | None = None,
     hotel_agent: Any | None = None,
+    call_injector: CallInjector | None = None,
 ) -> ToolRegistry:
     """构建固定工具白名单。
 
@@ -355,7 +356,8 @@ def build_trip_tool_registry(
         )
 
     # 步骤 4：注册固定工具白名单和稳定输入/输出 Schema。
-    registry = ToolRegistry()
+    # 验收测试可注入确定性故障；生产环境默认不传，工具调用路径不受影响。
+    registry = ToolRegistry(call_injector=call_injector)
     registry.register(
         ToolDefinition(
             name="search_attractions",
