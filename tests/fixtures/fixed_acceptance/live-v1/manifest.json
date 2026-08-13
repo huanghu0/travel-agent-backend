@@ -1,0 +1,143 @@
+{
+  "format_version": 1,
+  "suite_name": "travel-agent-fixed-e2e-v1",
+  "generated_at": "2026-08-13T07:54:39.529029Z",
+  "total_case_count": 15,
+  "records": [
+    {
+      "case_id": "beijing-1d-walking",
+      "file_name": "beijing-1d-walking.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T02:08:30.304500Z",
+      "request_sha256": "c577e60adb209d2a184f1696fad13d8944a451bc404a53e98d1e7b55f46870ea",
+      "state_sha256": "19e5a56e052c74dfbcc158c5027ce8afa9de5d81cab35204700dc6fd1fd2703f",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "beijing-3d-transit",
+      "file_name": "beijing-3d-transit.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T06:40:46.974288Z",
+      "request_sha256": "582f19f92a19b74457941a27a241fbc1e0e1b07cd5ecb87d163cd22087cacc21",
+      "state_sha256": "9822d935dcb432bc3e0787c3510a1af33c71a2b16432d9c09b2bfbab886201e8",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "beijing-5d-driving",
+      "file_name": "beijing-5d-driving.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T07:54:39.468023Z",
+      "request_sha256": "88eabd68d5156981cd726dcc6ae7145acb41e0a2e7fbeb36539da345f8721094",
+      "state_sha256": "7ebb1f3afe2d8782d71f58f52d5f14a0fda0d2df6c433d1fb38b0f50c4fbb9ee",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "chengdu-1d-walking",
+      "file_name": "chengdu-1d-walking.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T02:13:45.245550Z",
+      "request_sha256": "0ba37c087f5519f6281fd2a7c692f32da0aa0f36927ca1bae0af454252cea091",
+      "state_sha256": "55691d549109d1d5f048f39a5fde04b6f6f9aba4112e20cc77ef26afbdcacb2f",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "chengdu-3d-transit",
+      "file_name": "chengdu-3d-transit.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T02:14:49.405939Z",
+      "request_sha256": "47c32cf47cf67a32884b03c9f3b397ab303c54922e52d852da09f1764ef63dcd",
+      "state_sha256": "016ccdfabd836bf72fd3bdfe16f3b867832038bb11f6c5314301054e34db6c7b",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "chengdu-5d-driving",
+      "file_name": "chengdu-5d-driving.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T06:46:21.059884Z",
+      "request_sha256": "5b128a25e9b8cbde98ca4b55f1fc4f160b7b2a3c5707d7559ed1505663a5fd37",
+      "state_sha256": "97ff7e05ba06f1b2810205566b0b954b67b0f5ae7a3e5b853f8a93e1c0e25c64",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "hangzhou-1d-walking",
+      "file_name": "hangzhou-1d-walking.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T02:05:45.776911Z",
+      "request_sha256": "ceba846abde5b0e10bfb7f1967f134bf831ad9fcb5df4b29ed3f19ff079245b9",
+      "state_sha256": "639644f9cde11030a580a2d453780830c4756017ac3fe15e9db9e887e09aa8ae",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "hangzhou-3d-transit",
+      "file_name": "hangzhou-3d-transit.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T06:36:16.082905Z",
+      "request_sha256": "740752a2f501761a52af821eca4acec636a12dd4fa5e690dcdaaaa1f5b772b80",
+      "state_sha256": "7ff90f3d78cbff960ee3a2c03c55b3b8c7e13f5b87d11a4af5988b9bf1558814",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "hangzhou-5d-driving",
+      "file_name": "hangzhou-5d-driving.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T06:39:29.734562Z",
+      "request_sha256": "5ca11f538bb47e7716872d3be50ebd9cc570a7d96ca2b628e80e9b13b1e06289",
+      "state_sha256": "19d55087a7f1e8d3b955dfd59044eb67bd55a41355d62b9c0321c038289ce33b",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "shanghai-1d-walking",
+      "file_name": "shanghai-1d-walking.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T06:42:36.952657Z",
+      "request_sha256": "bcc744f7002f1da3ca734e1da193247c9e3ad2f236b4b279957e27091f8fb817",
+      "state_sha256": "6a640e5f619c1a227f6650fc180ca0a485b02b41e8c1cee55ae447e2772b0e5e",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "shanghai-3d-transit",
+      "file_name": "shanghai-3d-transit.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T06:44:10.224135Z",
+      "request_sha256": "7653192e9d4084753d8208904993521046ca4d954af8a988174efe07ceb12cad",
+      "state_sha256": "1b54d4dbac31465d211ac257beed9d204000a0ecf69931bd904bf0d721ae2909",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "shanghai-5d-driving",
+      "file_name": "shanghai-5d-driving.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T02:13:14.279974Z",
+      "request_sha256": "91e3dcf9d77a535385d3dfa70905da45cf998238220c0bc49f0b1c04461ca9d4",
+      "state_sha256": "cc22a3bf72575f01c1a14d7188f8936d5ae4c5ca996141deec53e8e45a53c149",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "xian-1d-walking",
+      "file_name": "xian-1d-walking.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T06:46:58.869848Z",
+      "request_sha256": "3a2d35e17dbadc4f2421bd394363c52a225daf0ad4fbbd42b1fc587d941d8395",
+      "state_sha256": "fc8e93be630c2000ef216a6d6da8c743395b2798d7f0fe3173bec25ab8f7682f",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "xian-3d-transit",
+      "file_name": "xian-3d-transit.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T06:48:01.187985Z",
+      "request_sha256": "1de37824186623d2275b2c1315a53fafb70bb0cf1e43ba6af76b5b94869f292d",
+      "state_sha256": "1670d4abe301cb4c41507106a5d4e086517de79368d5daea99dc2f966c2bcca5",
+      "redacted_field_count": 0
+    },
+    {
+      "case_id": "xian-5d-driving",
+      "file_name": "xian-5d-driving.json",
+      "source": "live",
+      "recorded_at": "2026-08-13T06:49:23.220394Z",
+      "request_sha256": "bb01cefe76a2d165f2f5d36080b2ad894b5b09847485590835409bcc6374d60c",
+      "state_sha256": "cd019fef1ad441c1ed519c3575c07ac24b7cbeddbac20e73fab8ed6358edd9ae",
+      "redacted_field_count": 0
+    }
+  ]
+}

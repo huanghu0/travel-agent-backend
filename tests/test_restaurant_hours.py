@@ -6,6 +6,7 @@ from app.plan_content import (
     opening_status_for_interval,
     parse_opening_ranges,
 )
+from app.plan_content.restaurant_hours import meal_service_intervals
 from app.providers.amap.models import (
     GeoPoint,
     RestaurantCandidate,
@@ -133,6 +134,21 @@ class RestaurantOpeningHoursParserTests(unittest.TestCase):
         self.assertEqual(opening_status_for_interval("18:00-02:00", 23 * 60, 24 * 60), "open")
         self.assertEqual(opening_status_for_interval("18:00-02:00", 17 * 60, 18 * 60), "closed")
         self.assertEqual(opening_status_for_interval("暂无", 12 * 60, 13 * 60), "unknown")
+
+    def test_late_timeline_lunch_is_clamped_inside_constraint_window(self):
+        schedule_day = {
+            "timeline": [
+                {
+                    "item_type": "meal",
+                    "start_time": "13:15",
+                    "end_time": "14:15",
+                }
+            ]
+        }
+
+        interval = meal_service_intervals(schedule_day)["lunch"]
+
+        self.assertEqual((interval.start_time, interval.end_time), ("13:00", "14:00"))
 
 
 class RestaurantOpeningSelectionTests(unittest.TestCase):

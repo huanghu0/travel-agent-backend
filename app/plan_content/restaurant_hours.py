@@ -111,8 +111,18 @@ def opening_status_for_interval(
     return "closed"
 
 
-def meal_service_intervals(schedule_day: Any | None) -> dict[str, MealServiceInterval]:
-    """从已有时间轴推导早餐、午餐、晚餐预计时间，不改变日程容量评分。"""
+def meal_service_intervals(
+    schedule_day: Any | None,
+    *,
+    lunch_window_start: str = "11:30",
+    lunch_window_end: str = "14:00",
+) -> dict[str, MealServiceInterval]:
+    """从时间轴推导餐次，并把异常午餐区间确定性裁剪到约束窗口内。"""
+
+    lunch_window_start_minute = parse_clock(lunch_window_start)
+    lunch_window_end_minute = parse_clock(lunch_window_end)
+    if lunch_window_end_minute <= lunch_window_start_minute:
+        raise ValueError("lunch_window_end must be later than lunch_window_start")
 
     breakfast = MealServiceInterval("breakfast", 8 * 60, 8 * 60 + 45)
     lunch_start = 12 * 60
@@ -139,6 +149,20 @@ def meal_service_intervals(schedule_day: Any | None) -> dict[str, MealServiceInt
             last_end = max(last_end, end)
             if item_type == "meal":
                 lunch_start, lunch_end = start, end
+
+    # 兼容旧检查点或供应商异常时间轴：保留原用餐时长，但不允许完整午餐
+    # 超出约束窗口，避免内容重建持续制造同一个 meal.outside_time_window。
+    lunch_duration = max(1, lunch_end - lunch_start)
+    lunch_duration = min(
+        lunch_duration,
+        lunch_window_end_minute - lunch_window_start_minute,
+    )
+    latest_lunch_start = lunch_window_end_minute - lunch_duration
+    lunch_start = min(
+        max(lunch_start, lunch_window_start_minute),
+        latest_lunch_start,
+    )
+    lunch_end = lunch_start + lunch_duration
 
     dinner_start = max(18 * 60, last_end)
     return {

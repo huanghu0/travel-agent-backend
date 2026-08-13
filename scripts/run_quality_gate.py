@@ -18,7 +18,14 @@ def _run(command: list[str]) -> int:
 def main() -> int:
     commands = [
         [sys.executable, "-m", "compileall", "-q", "app", "tests", "scripts", "main.py"],
-        [sys.executable, "scripts/run_orchestrator_fault_recovery.py"],
+        [
+            sys.executable,
+            "scripts/run_orchestrator_fault_recovery.py",
+            "--json-report",
+            "build/reports/orchestrator-faults.json",
+            "--junit-report",
+            "build/reports/orchestrator-faults.junit.xml",
+        ],
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
         [
             sys.executable,

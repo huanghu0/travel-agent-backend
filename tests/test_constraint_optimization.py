@@ -217,14 +217,21 @@ class ConstraintEvaluatorTests(unittest.TestCase):
         self.assertIn("schedule.too_many_attractions", codes)
         self.assertEqual(first.model_dump(), second.model_dump())
 
-    def test_late_lunch_is_reported(self):
+    def test_long_attraction_keeps_complete_lunch_inside_constraint_window(self):
         request = make_request()
         plan = make_plan(("A",), (), visit_duration=360)
         schedule = ScheduleTimelineEvaluator().evaluate(request, plan, None)
 
         report = ConstraintEvaluator().evaluate(request, plan, schedule)
+        lunch = next(
+            item for item in schedule.days[0].timeline if item.item_type == "meal"
+        )
 
-        self.assertIn("meal.outside_time_window", {item.code for item in report.issues})
+        self.assertEqual((lunch.start_time, lunch.end_time), ("11:30", "12:30"))
+        self.assertNotIn(
+            "meal.outside_time_window",
+            {item.code for item in report.issues},
+        )
 
 
 class ConstraintOptimizerTests(unittest.TestCase):
@@ -277,6 +284,12 @@ class ConstraintOptimizerTests(unittest.TestCase):
         plan.days = [plan.days[0]]
         schedule_evaluator = ScheduleTimelineEvaluator()
         schedule = schedule_evaluator.evaluate(request, plan, None)
+        # ???????????????????????????????
+        lunch = next(
+            item for item in schedule.days[0].timeline if item.item_type == "meal"
+        )
+        lunch.start_time = "13:15"
+        lunch.end_time = "14:15"
         evaluator = ConstraintEvaluator()
         report = evaluator.evaluate(request, plan, schedule)
         optimizer = DeterministicConstraintOptimizer(

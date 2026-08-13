@@ -19,26 +19,82 @@ RouteLegKey = tuple[int, RouteLegType, int]
 RoutablePlace = Attraction | Hotel
 
 
+_MODE_MARKERS: tuple[tuple[RouteMode, tuple[str, ...]], ...] = (
+    (
+        "transit",
+        (
+            "\u516c\u5171\u4ea4\u901a",
+            "\u516c\u4ea4",
+            "\u5730\u94c1",
+            "\u8f68\u9053",
+            "\u8f7b\u8f68",
+            "public",
+            "transit",
+            "metro",
+            "subway",
+            "bus",
+        ),
+    ),
+    (
+        "driving",
+        (
+            "\u81ea\u9a7e",
+            "\u9a7e\u8f66",
+            "\u5f00\u8f66",
+            "\u6c7d\u8f66",
+            "\u6253\u8f66",
+            "\u51fa\u79df\u8f66",
+            "driving",
+            "drive",
+            "car",
+            "taxi",
+        ),
+    ),
+    ("walking", ("\u6b65\u884c", "\u5f92\u6b65", "walking", "walk", "hiking")),
+)
+
+
+def _match_transportation_mode(text: str) -> RouteMode | None:
+    """从一段已经规范化的文本中识别交通模式。"""
+
+    for mode, markers in _MODE_MARKERS:
+        if any(marker in text for marker in markers):
+            return mode
+    return None
+
+
 def normalize_transportation_mode(value: str | None) -> RouteMode:
     """把中英文自由文本交通方式映射成高德路线模式。"""
 
     text = (value or "").strip().lower()
-    # “步行 + 地铁”等组合描述优先识别为公共交通。
-    if any(marker in text for marker in (
-        "\u516c\u5171\u4ea4\u901a", "\u516c\u4ea4", "\u5730\u94c1", "\u8f68\u9053", "\u8f7b\u8f68",
-        "public", "transit", "metro", "subway", "bus",
-    )):
-        return "transit"
-    if any(marker in text for marker in (
-        "\u81ea\u9a7e", "\u9a7e\u8f66", "\u5f00\u8f66", "\u6c7d\u8f66", "\u6253\u8f66", "\u51fa\u79df\u8f66",
-        "driving", "drive", "car", "taxi",
-    )):
-        return "driving"
-    if any(marker in text for marker in (
-        "\u6b65\u884c", "\u5f92\u6b65", "walking", "walk", "hiking",
-    )):
-        return "walking"
-    # 城市出行默认使用公共交通，不能在用户未说明时假设可以驾车。
+
+    # 内容重建后的文案可能同时包含“主交通方式”和个别路线分段方式。
+    # 显式声明应优先于后文分段，避免驾车主模式被公交分段误判。
+    for prefix in (
+        "\u51fa\u884c\u65b9\u5f0f",
+        "\u4ea4\u901a\u65b9\u5f0f",
+        "travel mode",
+        "transportation",
+    ):
+        prefix_index = text.find(prefix)
+        if prefix_index < 0:
+            continue
+        declared = text[prefix_index + len(prefix):].lstrip(" \t:\uff1a")
+        declared = (
+            declared.split("\uff1b", 1)[0]
+            .split(";", 1)[0]
+            .split("\u3002", 1)[0]
+        )
+        declared_mode = _match_transportation_mode(declared)
+        if declared_mode is not None:
+            return declared_mode
+
+    # 没有显式声明时，“步行 + 地铁”等组合描述优先识别为公共交通。
+    matched = _match_transportation_mode(text)
+    if matched is not None:
+        return matched
+
+    # 城市出行默认使用公共交通，不在用户未说明时假设可以驾车。
     return "transit"
 
 

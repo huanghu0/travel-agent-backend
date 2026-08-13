@@ -125,6 +125,15 @@ def plan_content_source_fingerprint(
 class TripPlanConsistencyRebuilder:
     """根据最终酒店、景点和真实路线重建全部派生内容。"""
 
+    def __init__(
+        self,
+        *,
+        lunch_window_start: str = "11:30",
+        lunch_window_end: str = "14:00",
+    ) -> None:
+        self.lunch_window_start = lunch_window_start
+        self.lunch_window_end = lunch_window_end
+
     def rebuild(
         self,
         request: TripRequest,
@@ -242,8 +251,8 @@ class TripPlanConsistencyRebuilder:
         cost = f"\uff0c\u9884\u8ba1{hotel.estimated_cost}\u5143/\u665a" if hotel.estimated_cost > 0 else ""
         return f"\u5165\u4f4f{hotel.name}\uff08{hotel.address or '\u5730\u5740\u4ee5\u9884\u8ba2\u4fe1\u606f\u4e3a\u51c6'}{cost}\uff09\u3002"
 
-    @staticmethod
     def _build_meals(
+        self,
         request: TripRequest,
         attractions: list[Any],
         *,
@@ -266,7 +275,11 @@ class TripPlanConsistencyRebuilder:
             "dinner": dinner_anchor,
         }
         labels = {"breakfast": "早餐", "lunch": "午餐", "dinner": "晚餐"}
-        service_intervals = meal_service_intervals(schedule_day)
+        service_intervals = meal_service_intervals(
+            schedule_day,
+            lunch_window_start=self.lunch_window_start,
+            lunch_window_end=self.lunch_window_end,
+        )
         candidates_by_meal: dict[str, list[RestaurantCandidate]] = defaultdict(list)
         if restaurant_result is not None:
             for candidate in restaurant_result.candidates:

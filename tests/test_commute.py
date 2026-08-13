@@ -606,6 +606,12 @@ class CommuteOrchestratorTests(unittest.TestCase):
         self.assertEqual(state.commute_replacement_history[-1].status, "reverted")
         self.assertIn("id:near", state.commute_excluded_candidate_identities)
         self.assertEqual(state.commute_optimization_status, "not_started")
+        # ?????????????????????????????????
+        # ???????? optimize_routes ????????????
+        self.assertNotEqual(
+            self.orchestrator.decide_next_action(state),
+            AgentAction.OPTIMIZE_ROUTES,
+        )
 
 
 if __name__ == "__main__":

@@ -83,6 +83,7 @@ class ScheduleTimelineEvaluator:
         default_end_time: str = "18:00",
         lunch_duration_minutes: int = 60,
         lunch_window_start: str = "11:30",
+        lunch_window_end: str = "14:00",
         route_buffer_minutes: int = 10,
         attraction_buffer_minutes: int = 10,
         fallback_safety_factor: float = 1.3,
@@ -101,6 +102,16 @@ class ScheduleTimelineEvaluator:
             raise ValueError("fallback_safety_factor must be positive")
         self.lunch_duration_minutes = lunch_duration_minutes
         self.lunch_window_start_minute = _parse_clock(lunch_window_start)
+        self.lunch_window_end_minute = _parse_clock(lunch_window_end)
+        if self.lunch_window_end_minute <= self.lunch_window_start_minute:
+            raise ValueError("lunch_window_end must be later than lunch_window_start")
+        if lunch_duration_minutes > (
+            self.lunch_window_end_minute - self.lunch_window_start_minute
+        ):
+            raise ValueError("lunch duration must fit inside the configured lunch window")
+        self.latest_lunch_start_minute = (
+            self.lunch_window_end_minute - lunch_duration_minutes
+        )
         self.route_buffer_minutes = route_buffer_minutes
         self.attraction_buffer_minutes = attraction_buffer_minutes
         self.fallback_safety_factor = fallback_safety_factor
@@ -162,7 +173,9 @@ class ScheduleTimelineEvaluator:
         mode = normalize_transportation_mode(day.transportation or request.transportation)
         start_hotel, return_hotel = resolve_day_hotels(plan, day_position)
 
-        def append_item(
+        lunch_name = self._lunch_name(day)
+
+        def append_raw_item(
             item_type: str,
             name: str,
             duration: int,
@@ -170,6 +183,8 @@ class ScheduleTimelineEvaluator:
             source_index: int | None = None,
             transportation_time_source: str | None = None,
         ) -> None:
+            """只追加时间轴项目；午餐窗口判断由 append_item 统一处理。"""
+
             nonlocal current
             if duration <= 0:
                 return
@@ -188,7 +203,49 @@ class ScheduleTimelineEvaluator:
                 )
             )
 
-        lunch_name = self._lunch_name(day)
+        def append_lunch() -> None:
+            """在窗口内插入完整午餐，必要时显式记录午餐前等待时间。"""
+
+            nonlocal lunch_added, meal_minutes, break_minutes
+            if lunch_added or self.lunch_duration_minutes <= 0:
+                return
+            if current < self.lunch_window_start_minute:
+                wait_minutes = self.lunch_window_start_minute - current
+                append_raw_item("break", "午餐窗口等待", wait_minutes)
+                break_minutes += wait_minutes
+            append_raw_item("meal", lunch_name, self.lunch_duration_minutes)
+            meal_minutes += self.lunch_duration_minutes
+            lunch_added = True
+
+        def append_item(
+            item_type: str,
+            name: str,
+            duration: int,
+            *,
+            source_index: int | None = None,
+            transportation_time_source: str | None = None,
+        ) -> None:
+            """追加项目，并防止该项目把完整午餐推迟到配置窗口之外。"""
+
+            if duration <= 0:
+                return
+            if (
+                not lunch_added
+                and self.lunch_duration_minutes > 0
+                and item_type != "meal"
+                and (
+                    current >= self.lunch_window_start_minute
+                    or current + duration > self.latest_lunch_start_minute
+                )
+            ):
+                append_lunch()
+            append_raw_item(
+                item_type,
+                name,
+                duration,
+                source_index=source_index,
+                transportation_time_source=transportation_time_source,
+            )
 
         # 每天从对应酒店出发；退房日如果没有新酒店，
         # 则沿用最近一次酒店，确保前往首个景点的通勤耗时仍然可见。
@@ -220,17 +277,7 @@ class ScheduleTimelineEvaluator:
                 break_minutes += self.route_buffer_minutes
 
         for attraction_index, attraction in enumerate(day.attractions):
-            # 路线可能跨过中午，因此在下一个景点前插入午餐，
-            # 避免把午餐错误推迟到该景点游览结束之后。
-            if (
-                not lunch_added
-                and self.lunch_duration_minutes > 0
-                and current >= self.lunch_window_start_minute
-            ):
-                append_item("meal", lunch_name, self.lunch_duration_minutes)
-                meal_minutes += self.lunch_duration_minutes
-                lunch_added = True
-
+            # append_item 会在景点或路线跨过最迟开餐时间前先安排午餐。
             duration = max(0, int(attraction.visit_duration))
             append_item(
                 "attraction",
@@ -249,19 +296,6 @@ class ScheduleTimelineEvaluator:
                     source_index=attraction_index,
                 )
                 break_minutes += self.attraction_buffer_minutes
-
-            # 当前时间轴到达中午后插入一次午餐，但仅在
-            # 当天活动确实覆盖午餐时段时才执行。
-            if (
-                not lunch_added
-                and self.lunch_duration_minutes > 0
-                and current >= self.lunch_window_start_minute
-                and (has_next or current > 12 * 60)
-            ):
-                append_item("meal", lunch_name, self.lunch_duration_minutes)
-                meal_minutes += self.lunch_duration_minutes
-                lunch_added = True
-
             if not has_next:
                 continue
             route = routes.get((day_index, "between_attractions", attraction_index))
@@ -289,6 +323,15 @@ class ScheduleTimelineEvaluator:
                     source_index=attraction_index,
                 )
                 break_minutes += self.route_buffer_minutes
+
+        # 单景点且没有后续路线时，活动确实覆盖午餐时段才补午餐。
+        if (
+            not lunch_added
+            and self.lunch_duration_minutes > 0
+            and day.attractions
+            and current > 12 * 60
+        ):
+            append_lunch()
 
         # 返回当天酒店属于完整可执行行程的一部分；
         # 最终退房日如果没有酒店，则不生成返回酒店路线。

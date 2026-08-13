@@ -286,6 +286,44 @@ class TripPlanConsistencyRebuilderTests(unittest.TestCase):
         self.assertIn("\u9a7e\u8f66", rebuilt.days[0].transportation)
 
 
+    def test_rebuild_preserves_fingerprint_with_mixed_segment_mode_description(self):
+        request = make_request(days=1, transportation="driving")
+        plan = make_plan(
+            days=1,
+            attractions_by_day=[[attraction("Kept Place", 120.16)]],
+            transportation="driving",
+        )
+        before = plan_route_fingerprint(request, plan)
+        routes = RouteEstimateResult(
+            plan_fingerprint=before,
+            requested_legs=1,
+            evaluated_legs=1,
+            routes=[
+                RouteEstimate(
+                    day_index=0,
+                    leg_index=0,
+                    leg_type="hotel_departure",
+                    origin_name="Lake Hotel",
+                    destination_name="Kept Place",
+                    # 模拟供应商降级返回的公交分段，不应改写整日主交通方式。
+                    mode="transit",
+                    distance_meters=5000,
+                    duration_seconds=1200,
+                )
+            ],
+        )
+
+        rebuilt = TripPlanConsistencyRebuilder().rebuild(
+            request,
+            plan,
+            route_estimates=routes,
+        )
+
+        self.assertIn("\u51fa\u884c\u65b9\u5f0f\uff1a\u9a7e\u8f66", rebuilt.days[0].transportation)
+        self.assertIn("\u516c\u5171\u4ea4\u901a\u7ea6", rebuilt.days[0].transportation)
+        self.assertEqual(plan_route_fingerprint(request, rebuilt), before)
+
+
 class ContentRefillOrchestratorTests(unittest.TestCase):
     def make_ready_state(self) -> AgentState:
         request = make_request(days=1)

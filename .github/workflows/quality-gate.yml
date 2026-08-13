@@ -1,4 +1,4 @@
-﻿name: travel-agent-quality-gate
+name: travel-agent-quality-gate
 
 on:
   push:
@@ -18,3 +18,10 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run deterministic quality gate
         run: python scripts/run_quality_gate.py
+      - name: Upload Orchestrator fault reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchestrator-fault-reports
+          path: build/reports/
+          if-no-files-found: warn

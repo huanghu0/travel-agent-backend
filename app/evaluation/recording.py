@@ -124,13 +124,27 @@ def _sanitize_value(value: Any, path: str, redacted_paths: list[str]) -> Any:
     return value
 
 
+def sanitize_recording_payload(
+    value: Any,
+    *,
+    root_path: str = "payload",
+) -> tuple[Any, list[str]]:
+    """递归清理任意录制载荷，供状态样本和 HTTP 失败报告共同使用。"""
+
+    redacted_paths: list[str] = []
+    sanitized_payload = _sanitize_value(value, root_path, redacted_paths)
+    return sanitized_payload, sorted(set(redacted_paths))
+
+
 def sanitize_agent_state(state: AgentState) -> tuple[AgentState, list[str]]:
     """递归移除录制状态中的密钥、令牌和认证信息，并重新执行模型校验。"""
 
-    redacted_paths: list[str] = []
     raw_state = state.model_dump(mode="json")
-    sanitized_payload = _sanitize_value(raw_state, "state", redacted_paths)
-    return AgentState.model_validate(sanitized_payload), sorted(set(redacted_paths))
+    sanitized_payload, redacted_paths = sanitize_recording_payload(
+        raw_state,
+        root_path="state",
+    )
+    return AgentState.model_validate(sanitized_payload), redacted_paths
 
 
 def create_acceptance_recording(
@@ -190,18 +204,68 @@ def write_acceptance_recording(path: str | Path, recording: AcceptanceRecording)
     target.write_text(recording.model_dump_json(indent=2), encoding="utf-8")
 
 
+def _load_manifest_recordings(
+    directory: Path,
+) -> dict[str, AcceptanceRecording]:
+    """读取并校验已有清单，供增量录制合并使用。"""
+
+    manifest_path = directory / _MANIFEST_FILE_NAME
+    if not manifest_path.exists():
+        return {}
+    manifest = AcceptanceRecordingManifest.model_validate_json(
+        manifest_path.read_text(encoding="utf-8")
+    )
+    if manifest.format_version != RECORDING_FORMAT_VERSION:
+        raise ValueError(
+            f"unsupported acceptance manifest version: {manifest.format_version}"
+        )
+    if manifest.suite_name != RECORDING_SUITE_NAME:
+        raise ValueError(f"unexpected acceptance suite: {manifest.suite_name}")
+    if manifest.total_case_count != len(manifest.records):
+        raise ValueError("acceptance manifest total_case_count does not match records")
+
+    recordings: dict[str, AcceptanceRecording] = {}
+    for entry in manifest.records:
+        if entry.case_id in recordings:
+            raise ValueError(f"duplicate acceptance case in manifest: {entry.case_id}")
+        path = _resolve_recording_path(directory, entry.file_name)
+        if not path.exists():
+            raise ValueError(f"acceptance recording file is missing: {entry.file_name}")
+        recording = AcceptanceRecording.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+        verify_acceptance_recording(recording)
+        if recording.case_id != entry.case_id:
+            raise ValueError(f"manifest case mismatch: {entry.case_id}")
+        if recording.source != entry.source:
+            raise ValueError(f"manifest source mismatch: {entry.case_id}")
+        if recording.request_sha256 != entry.request_sha256:
+            raise ValueError(f"manifest request checksum mismatch: {entry.case_id}")
+        if recording.state_sha256 != entry.state_sha256:
+            raise ValueError(f"manifest checksum mismatch: {entry.case_id}")
+        recordings[entry.case_id] = recording
+    return recordings
+
+
 def write_acceptance_recording_suite(
     directory: str | Path,
     recordings: Iterable[AcceptanceRecording],
     *,
     generated_at: datetime | None = None,
+    merge_existing: bool = False,
 ) -> AcceptanceRecordingManifest:
-    """原子语义地写入录制文件，并生成用于 CI 完整性检查的清单。"""
+    """写入录制文件和 CI 清单；增量模式会保留未被本轮覆盖的已有样本。"""
 
     target_dir = Path(directory)
     target_dir.mkdir(parents=True, exist_ok=True)
+    recording_by_case = (
+        _load_manifest_recordings(target_dir) if merge_existing else {}
+    )
+    for recording in recordings:
+        recording_by_case[recording.case_id] = recording
+
     entries: list[AcceptanceRecordingEntry] = []
-    for recording in sorted(recordings, key=lambda item: item.case_id):
+    for recording in sorted(recording_by_case.values(), key=lambda item: item.case_id):
         file_name = f"{recording.case_id}.json"
         write_acceptance_recording(target_dir / file_name, recording)
         entries.append(

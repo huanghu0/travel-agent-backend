@@ -88,6 +88,15 @@ class RoutePlanningTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(normalize_transportation_mode(value), expected)
 
+    def test_explicit_mode_declaration_wins_over_route_segment_text(self):
+        # 重建文案中可能包含与主方式不同的降级分段，路线指纹必须遵循显式声明。
+        description = (
+            "\u51fa\u884c\u65b9\u5f0f\uff1a\u9a7e\u8f66\uff1b"
+            "A\u2192B\uff08\u516c\u5171\u4ea4\u901a\u7ea620\u5206\u949f\uff09\u3002"
+        )
+
+        self.assertEqual(normalize_transportation_mode(description), "driving")
+
     def test_fingerprint_is_stable_and_changes_when_attraction_order_changes(self):
         request = make_request()
         plan = make_plan()

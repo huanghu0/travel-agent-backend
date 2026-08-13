@@ -127,6 +127,7 @@ trip_orchestrator = TripOrchestrator(
     schedule_default_end_time=settings.SCHEDULE_DEFAULT_END_TIME,
     schedule_lunch_duration_minutes=settings.SCHEDULE_LUNCH_DURATION_MINUTES,
     schedule_lunch_window_start=settings.CONSTRAINT_LUNCH_WINDOW_START,
+    schedule_lunch_window_end=settings.CONSTRAINT_LUNCH_WINDOW_END,
     schedule_route_buffer_minutes=settings.SCHEDULE_ROUTE_BUFFER_MINUTES,
     schedule_attraction_buffer_minutes=(
         settings.SCHEDULE_ATTRACTION_BUFFER_MINUTES

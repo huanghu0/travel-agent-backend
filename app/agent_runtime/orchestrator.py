@@ -171,6 +171,7 @@ class TripOrchestrator:
         schedule_default_end_time: str = "18:00",
         schedule_lunch_duration_minutes: int = 60,
         schedule_lunch_window_start: str = "11:30",
+        schedule_lunch_window_end: str = "14:00",
         schedule_route_buffer_minutes: int = 10,
         schedule_attraction_buffer_minutes: int = 10,
         schedule_evaluator: ScheduleTimelineEvaluator | None = None,
@@ -341,6 +342,7 @@ class TripOrchestrator:
             default_end_time=schedule_default_end_time,
             lunch_duration_minutes=schedule_lunch_duration_minutes,
             lunch_window_start=schedule_lunch_window_start,
+            lunch_window_end=schedule_lunch_window_end,
             route_buffer_minutes=schedule_route_buffer_minutes,
             attraction_buffer_minutes=schedule_attraction_buffer_minutes,
         )
@@ -400,7 +402,11 @@ class TripOrchestrator:
             )
         )
         self.plan_consistency_rebuilder = (
-            plan_consistency_rebuilder or TripPlanConsistencyRebuilder()
+            plan_consistency_rebuilder
+            or TripPlanConsistencyRebuilder(
+                lunch_window_start=constraint_lunch_window_start,
+                lunch_window_end=constraint_lunch_window_end,
+            )
         )
         self.max_repeated_action_inputs = max_repeated_action_inputs
         self.max_no_progress_steps = max_no_progress_steps
@@ -1299,6 +1305,55 @@ class TripOrchestrator:
             state.completion_warnings = []
 
     @staticmethod
+    def _synchronize_evaluation_fingerprints(state: AgentState) -> None:
+        """回滚到基线后，根据已恢复的评估结果重新同步业务输入指纹。"""
+
+        for key in ("route_quality", "commute", "schedule", "constraints", "validation"):
+            state.evaluation_input_fingerprints.pop(key, None)
+        if state.trip_plan is None or state.route_estimates is None:
+            return
+
+        route_fingerprint = plan_route_fingerprint(state.request, state.trip_plan)
+        if (
+            state.route_quality_report is not None
+            and state.route_quality_plan_fingerprint == route_fingerprint
+        ):
+            state.evaluation_input_fingerprints["route_quality"] = (
+                route_quality_input_fingerprint(
+                    state.request, state.trip_plan, state.route_estimates
+                )
+            )
+        if (
+            state.commute_report is not None
+            and state.commute_plan_fingerprint == route_fingerprint
+        ):
+            state.evaluation_input_fingerprints["commute"] = commute_input_fingerprint(
+                state.request, state.trip_plan, state.route_estimates
+            )
+        if (
+            state.schedule_quality_report is not None
+            and state.schedule_quality_plan_fingerprint == route_fingerprint
+        ):
+            state.evaluation_input_fingerprints["schedule"] = schedule_input_fingerprint(
+                state.request, state.trip_plan, state.route_estimates
+            )
+        if (
+            state.constraint_report is not None
+            and state.schedule_quality_report is not None
+            and state.constraint_plan_fingerprint
+            == constraint_plan_fingerprint(state.request, state.trip_plan)
+        ):
+            state.evaluation_input_fingerprints["constraints"] = (
+                constraint_input_fingerprint(
+                    state.request,
+                    state.trip_plan,
+                    state.schedule_quality_report,
+                    state.attractions,
+                    state.weather,
+                )
+            )
+
+    @staticmethod
     def _clear_route_analysis(
         state: AgentState,
         *,
@@ -1460,6 +1515,7 @@ class TripOrchestrator:
                 )
                 state.schedule_optimization_status = "not_started"
                 self._refresh_schedule_quality(state)
+                self._synchronize_evaluation_fingerprints(state)
 
             state.route_optimization_history.append(
                 RouteOptimizationRecord(
@@ -1827,6 +1883,7 @@ class TripOrchestrator:
                 state.schedule_quality_plan_fingerprint = baseline_route_fingerprint
                 state.constraint_report = baseline_constraint.model_copy(deep=True)
                 state.constraint_plan_fingerprint = baseline_constraint_fingerprint
+                self._synchronize_evaluation_fingerprints(state)
                 state.commute_optimization_status = (
                     "not_started"
                     if state.commute_replacement_count
@@ -2185,6 +2242,7 @@ class TripOrchestrator:
                 state.route_quality_plan_fingerprint = baseline_fingerprint
                 state.schedule_quality_report = baseline_quality.model_copy(deep=True)
                 state.schedule_quality_plan_fingerprint = baseline_fingerprint
+                self._synchronize_evaluation_fingerprints(state)
 
             state.schedule_optimization_history.append(
                 ScheduleOptimizationRecord(
@@ -2495,6 +2553,7 @@ class TripOrchestrator:
                 state.schedule_quality_plan_fingerprint = route_fingerprint
                 state.constraint_report = baseline_report.model_copy(deep=True)
                 state.constraint_plan_fingerprint = baseline_fingerprint
+                self._synchronize_evaluation_fingerprints(state)
 
             state.constraint_optimization_history.append(
                 ConstraintOptimizationRecord(
@@ -2756,6 +2815,7 @@ class TripOrchestrator:
                 state.schedule_quality_plan_fingerprint = baseline_route_fingerprint
                 state.constraint_report = baseline_constraint.model_copy(deep=True)
                 state.constraint_plan_fingerprint = baseline_constraint_fingerprint
+                self._synchronize_evaluation_fingerprints(state)
                 state.content_refill_status = (
                     "not_started"
                     if state.content_refill_count

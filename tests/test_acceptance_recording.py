@@ -9,6 +9,7 @@ from app.evaluation import (
     load_acceptance_recording,
     load_acceptance_recording_suite,
     sanitize_agent_state,
+    sanitize_recording_payload,
     write_acceptance_recording_suite,
 )
 from app.evaluation.sample_factory import build_synthetic_acceptance_state
@@ -152,6 +153,51 @@ class AcceptanceRecordingTests(unittest.TestCase):
                     allowed_sources={"synthetic"},
                     allow_legacy=False,
                 )
+
+    def test_incremental_suite_merge_preserves_existing_recordings(self):
+        first, second = FIXED_ACCEPTANCE_SCENARIOS[:2]
+        first_recording = create_acceptance_recording(
+            first, build_synthetic_acceptance_state(first), source="synthetic"
+        )
+        second_recording = create_acceptance_recording(
+            second, build_synthetic_acceptance_state(second), source="synthetic"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            write_acceptance_recording_suite(directory, [first_recording])
+            manifest = write_acceptance_recording_suite(
+                directory,
+                [second_recording],
+                merge_existing=True,
+            )
+            states = load_acceptance_recording_suite(
+                directory,
+                [first, second],
+                require_manifest=True,
+                allowed_sources={"synthetic"},
+                allow_legacy=False,
+            )
+
+        self.assertEqual(manifest.total_case_count, 2)
+        self.assertEqual(
+            [entry.case_id for entry in manifest.records],
+            sorted([first.case_id, second.case_id]),
+        )
+        self.assertEqual(len(states), 2)
+
+    def test_generic_recording_payload_sanitizes_failure_details(self):
+        payload = {
+            "detail": "Bearer top-secret-token",
+            "nested": {"api_key": "plain-secret", "safe": "visible"},
+        }
+
+        sanitized, paths = sanitize_recording_payload(payload, root_path="failure")
+
+        self.assertNotIn("top-secret-token", json.dumps(sanitized))
+        self.assertEqual(sanitized["nested"]["api_key"], "[REDACTED]")
+        self.assertEqual(sanitized["nested"]["safe"], "visible")
+        self.assertIn("failure.nested.api_key", paths)
 
 
 if __name__ == "__main__":
