@@ -15,7 +15,10 @@
 
 ```mermaid
 flowchart TD
-    A["FastAPI /api/trip/plan"] --> B["TripOrchestrator"]
+    A["同步 /api/trip/plan"] --> B["TripOrchestrator"]
+    A2["异步 /api/trip/tasks"] --> Q["SQLite 任务队列 + Worker 租约"]
+    Q --> B
+    Q --> S["可回放 SSE 事件"]
     B --> C["AgentState 确定性状态机"]
     C --> D["ExecutionPolicy"]
     D --> E["ToolRegistry 工具白名单"]
@@ -217,6 +220,19 @@ flowchart TD
 - `scripts/run_orchestrator_fault_recovery.py` 可输出 JSON 与 JUnit XML；质量门默认写入 `build/reports/`。
 - 2026-08-13 最新结构化报告为 14/14 通过，总通过率 100%。
 
+### 4.18 异步任务、真实进度与断线恢复
+
+- `POST /api/trip/tasks` 只持久化任务并返回 HTTP 202，不在请求线程调用高德或 LLM。
+- SQLite 保存任务快照和自增事件，页面刷新或浏览器断线后可通过 task ID 和事件游标恢复。
+- SSE 支持 `Last-Event-ID` 与 `after_event_id`，前后端双重按 event ID 去重。
+- 支持取消排队中和执行中任务；每次工具调用、动作循环和退避等待前都会检查取消。
+- Worker 使用原子领取、租约和心跳避免重复执行；失去租约的旧 Worker 不能继续写进度或覆盖终态。
+- 服务重启后，以同一 session ID 从最近 AgentState 检查点恢复未完成任务。
+- 成功任务保存 `result_session_id`，前端自动跳转 `/result/:sessionId`。
+- 失败和超时任务返回可展示的结构化故障报告。
+- 原同步规划接口及第四阶段 TripDraft/TripPlanVersion 功能继续兼容。
+- 详细设计、API 和运维边界见 `docs/async-task-runtime.md`。
+
 ## 5. 当前边界与已知问题
 
 1. **跨外部调用的循环仍可能增加步骤**：状态跳转压缩已经合并连续本地评估，部分可接受策略也能在只剩非关键问题时提前完成；但“替换景点 → 查询真实路线 → 复验 → 再优化”等包含高德调用的核心质量循环仍必须占用独立物理步骤。
@@ -226,7 +242,7 @@ flowchart TD
 5. **天气属于查询时快照**：远期旅行日期可能没有可靠预报，应显式区分预报、历史气候和未知状态。
 6. **质量指标已有统一基线，但还没有生产监控面板**：SQLite 已能统计完整/部分完成率、质量分、问题代码、步骤和模型消耗；仍需 OpenTelemetry、告警和可视化。
 7. **Live 验收链路完整，但真实业务质量尚未全部达标**：15 个 `live` 样本已经 100% 覆盖并通过 manifest/摘要校验，当前只有 5/15 达到固定质量阈值；主要缺口是每日最低景点、过长单段通勤和个别路线不可用。
-8. **同步外部调用较多**：FastAPI 已通过线程池避免阻塞事件循环，但大规模并发时还需要任务队列、限流和异步化设计。
+8. **当前 Worker 仍与 FastAPI 同进程部署**：SQLite 租约已支持多进程互斥和重启恢复，但大规模并发时仍应拆分独立 Worker 服务，并增加用户级限流、容量控制和队列运维。
 
 ## 6. 后续工作计划
 
@@ -313,7 +329,7 @@ flowchart TD
 - 接入饮食禁忌、儿童餐、排队和预订等可选数据源。
 - 对远期天气明确返回“尚无可靠预报”，避免把当前天气当作未来天气。
 
-### 阶段五：受约束的自主决策层
+### 阶段六：受约束的自主决策层
 
 在确定性工具层和评测体系稳定后，再增加 LLM Planner/Coordinator：
 
@@ -324,9 +340,9 @@ flowchart TD
 - 确定性状态机始终作为安全兜底。
 - 对每次决策记录依据、置信度、结果和是否回滚。
 
-### 阶段六：生产化能力
+### 阶段七：生产化能力
 
-- 后台任务队列、任务取消和进度推送。
+- 异步任务运行时已完成；下一步拆分独立 Worker 进程并增加队列运维接口。
 - API 鉴权、用户级配额和限流。
 - 密钥只存服务端环境或密钥管理系统，并建立轮换流程。
 - 数据库迁移、备份、清理和隐私保留策略。
@@ -340,4 +356,6 @@ flowchart TD
 - `AGENT_MAX_REPEATED_ACTION_INPUTS=1`：同一收敛窗口内，相同动作和业务输入最多成功执行一次。
 - `AGENT_MAX_NO_PROGRESS_STEPS=3`：连续三个成功动作没有改变核心业务状态时提前终止，避免耗尽全部步骤。
 - `AGENT_MAX_LOCAL_ACTIONS_PER_STEP=8`：单个物理步骤最多吸收八个确定性本地动作；调低可获得更细检查点，调高可减少物理步骤。
+- `TRIP_TASK_LEASE_SECONDS=30`、`TRIP_TASK_HEARTBEAT_SECONDS=5`：租约必须明显长于心跳；异常重启后会等待旧租约过期再恢复。
+- `TRIP_TASK_SSE_POLL_SECONDS=0.5`、`TRIP_TASK_SSE_HEARTBEAT_SECONDS=15`：控制事件读取频率和代理保活。
 - API Key 曾在对话或日志中暴露时，应立即在服务端吊销旧 Key、生成新 Key、更新本地环境并重启服务。

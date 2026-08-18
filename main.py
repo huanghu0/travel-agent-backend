@@ -1,8 +1,12 @@
+from contextlib import asynccontextmanager
+import asyncio
+import json
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import StreamingResponse
 
 from app.agent_runtime import (
     AgentActionError,
@@ -45,11 +49,34 @@ from app.schemas.trip_draft_schema import (
     TripPlanVersion,
 )
 from app.services import TripDraftService
+from app.task_runtime import (
+    SQLiteTripTaskStore,
+    TaskIdempotencyConflictError,
+    TripPlanningTask,
+    TripTaskCancelResponse,
+    TripTaskCreateResponse,
+    TripTaskNotFoundError,
+)
+from app.task_runtime.worker import TripTaskWorker, WorkerSettings
 from app.tools import ToolDescriptor, build_trip_tool_registry
 from app.tools.unsplash_tools import get_place_photo
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """应用启动时恢复持久化任务队列，关闭时停止领取新任务。"""
+
+    if settings.TRIP_TASK_WORKER_ENABLED:
+        trip_task_worker.start()
+    try:
+        yield
+    finally:
+        if settings.TRIP_TASK_WORKER_ENABLED:
+            trip_task_worker.stop()
+
+
 # 初始化FastAPI应用
 app = FastAPI(
+    lifespan=lifespan,
     title="旅行助手智能体API",
     description="基于FastAPI+LangChain的智能旅行规划助手",
     version="1.0.0",
@@ -216,6 +243,21 @@ trip_draft_service = TripDraftService(
 )
 
 
+# 阶段五：任务元数据与 SSE 事件同样写入 SQLite，独立于 AgentState 检查点。
+trip_task_store = SQLiteTripTaskStore(settings.AGENT_MEMORY_DB_PATH)
+trip_task_worker = TripTaskWorker(
+    task_store=trip_task_store,
+    state_store=agent_state_store,
+    orchestrator=trip_orchestrator,
+    settings=WorkerSettings(
+        poll_interval_seconds=settings.TRIP_TASK_WORKER_POLL_SECONDS,
+        lease_seconds=settings.TRIP_TASK_LEASE_SECONDS,
+        heartbeat_interval_seconds=settings.TRIP_TASK_HEARTBEAT_SECONDS,
+        shutdown_timeout_seconds=settings.TRIP_TASK_SHUTDOWN_TIMEOUT_SECONDS,
+    ),
+)
+
+
 _STAGE_NAMES = {
     "search_attractions": "景点搜索",
     "get_weather": "天气查询",
@@ -279,6 +321,138 @@ def list_agent_tools():
     """返回安全工具元数据，不包含处理器实现和密钥。"""
 
     return trip_tool_registry.describe()
+
+
+@app.post(
+    "/api/trip/tasks",
+    summary="创建异步旅行规划任务",
+    response_model=TripTaskCreateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_trip_task(
+    request: TripRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    """只持久化任务并唤醒 Worker，不在请求线程执行高德或 LLM。"""
+
+    try:
+        task, reused = trip_task_store.create_task(
+            request, idempotency_key=idempotency_key
+        )
+        trip_task_worker.wake()
+        return TripTaskCreateResponse(
+            task_id=task.task_id,
+            session_id=task.session_id,
+            status=task.status,
+            created_at=task.created_at,
+            reused=reused,
+        )
+    except TaskIdempotencyConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/trip/tasks/{task_id}",
+    summary="查询异步旅行规划任务",
+    response_model=TripPlanningTask,
+)
+def get_trip_task(task_id: str):
+    """页面刷新或断线恢复时，以该持久化快照为准。"""
+
+    try:
+        return trip_task_store.get_task(task_id)
+    except TripTaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/trip/tasks/{task_id}/cancel",
+    summary="取消等待中或执行中的旅行规划任务",
+    response_model=TripTaskCancelResponse,
+)
+def cancel_trip_task(task_id: str):
+    """设置持久化取消标记；执行中的 Worker 会在下一安全检查点停止。"""
+
+    try:
+        task = trip_task_store.request_cancel(task_id)
+        trip_task_worker.wake()
+        return TripTaskCancelResponse(
+            task_id=task.task_id,
+            status=task.status,
+            cancel_requested=task.cancel_requested,
+            message=task.message,
+        )
+    except TripTaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/trip/tasks/{task_id}/events",
+    summary="订阅异步旅行规划任务事件",
+)
+async def stream_trip_task_events(
+    task_id: str,
+    request: Request,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    after_event_id: int = Query(default=0, ge=0),
+):
+    """按 SQLite 自增 event_id 回放事件，SSE 重连时不会重复发送旧事件。"""
+
+    try:
+        trip_task_store.get_task(task_id)
+    except TripTaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        header_cursor = int(last_event_id) if last_event_id else 0
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Last-Event-ID 必须是整数") from exc
+    initial_cursor = max(after_event_id, header_cursor, 0)
+
+    async def event_generator():
+        cursor = initial_cursor
+        last_heartbeat = asyncio.get_running_loop().time()
+        while True:
+            if await request.is_disconnected():
+                return
+            events = await run_in_threadpool(
+                trip_task_store.list_events,
+                task_id,
+                after_event_id=cursor,
+                limit=200,
+            )
+            for event in events:
+                cursor = event.event_id
+                payload = json.dumps(
+                    event.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                yield (
+                    f"id: {event.event_id}\n"
+                    f"event: {event.event_type}\n"
+                    f"data: {payload}\n\n"
+                )
+            task = await run_in_threadpool(trip_task_store.get_task, task_id)
+            if task.terminal:
+                return
+            now = asyncio.get_running_loop().time()
+            if now - last_heartbeat >= settings.TRIP_TASK_SSE_HEARTBEAT_SECONDS:
+                yield ": heartbeat\n\n"
+                last_heartbeat = now
+            await asyncio.sleep(max(0.05, settings.TRIP_TASK_SSE_POLL_SECONDS))
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/trip/plan", summary="生成旅行计划", response_model=TripPlanResponse)

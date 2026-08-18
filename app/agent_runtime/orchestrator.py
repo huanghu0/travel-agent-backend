@@ -78,6 +78,13 @@ from app.scheduling import (
     DeterministicScheduleOptimizer,
     ScheduleTimelineEvaluator,
 )
+from app.task_runtime.context import (
+    notify_action_completed,
+    notify_action_started,
+    raise_if_task_cancelled,
+    raise_if_task_lease_lost,
+    sleep_with_task_cancellation,
+)
 from app.tools.models import ActionResult, ToolErrorType
 from app.tools.registry import ToolRegistry
 from app.tools.trip_registry import build_trip_tool_registry
@@ -530,11 +537,14 @@ class TripOrchestrator:
 
         # 步骤 2：每轮执行一个物理动作，再尽可能吸收后续本地状态跳转。
         while not state.finished and state.current_step < state.max_steps:
+            # 异步 Worker 通过 ContextVar 注入取消检查；同步接口调用时是空操作。
+            raise_if_task_cancelled()
             runtime_reason = self.execution_policy.runtime_budget_reason(state)
             if runtime_reason:
                 self._raise_budget_exhausted(state, runtime_reason)
 
             action = self.decide_next_action(state)
+            notify_action_started(state, action.value)
             input_fingerprint, success_key = self._prepare_convergence_action(
                 state, action
             )
@@ -566,8 +576,11 @@ class TripOrchestrator:
                         root_record=successful_record,
                     )
             finally:
+                # 写检查点前先确认租约，避免旧 Worker 在恢复任务后覆盖新 Worker 状态。
+                raise_if_task_lease_lost()
                 # 一个物理步骤只写入一次常规检查点；子动作已全部进入 action_history。
                 self._checkpoint(state)
+                notify_action_completed(state, action.value)
 
         # 步骤 3：达到最大物理步数仍未结束时，明确失败。
         if not state.finished:
@@ -630,6 +643,7 @@ class TripOrchestrator:
 
         batch_started = False
         for batch_index in range(1, state.execution_budget.max_local_actions_per_step + 1):
+            raise_if_task_cancelled()
             if state.finished:
                 break
             runtime_reason = self.execution_policy.runtime_budget_reason(state)
@@ -1189,7 +1203,7 @@ class TripOrchestrator:
                 state.total_retry_delay_ms += delay_ms
                 # 等待前先持久化失败记录和重试延迟，进程退出后仍可复盘。
                 self._checkpoint(state)
-                self.execution_policy.sleep_before_retry(decision.delay_seconds)
+                sleep_with_task_cancellation(decision.delay_seconds)
                 return
 
             if action is AgentAction.SUPPLEMENT_ATTRACTIONS:
@@ -1241,7 +1255,7 @@ class TripOrchestrator:
                 state.total_retry_count += 1
                 state.total_retry_delay_ms += delay_ms
                 self._checkpoint(state)
-                self.execution_policy.sleep_before_retry(decision.delay_seconds)
+                sleep_with_task_cancellation(decision.delay_seconds)
                 return
             if action is AgentAction.SUPPLEMENT_ATTRACTIONS:
                 self._handle_failed_commute_supplement(

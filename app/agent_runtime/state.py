@@ -106,6 +106,7 @@ AgentStatus = Literal[
     "max_steps_reached",
     "budget_exhausted",
     "convergence_stopped",
+    "cancelled",
 ]
 
 

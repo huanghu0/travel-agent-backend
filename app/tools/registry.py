@@ -8,6 +8,11 @@ from typing import Any, Callable, Protocol
 
 from pydantic import BaseModel, ValidationError
 
+from app.task_runtime.context import (
+    TaskCancellationRequested,
+    raise_if_task_cancelled,
+)
+from app.task_runtime.store import TaskLeaseLostError
 from app.tools.models import ActionResult, ToolDescriptor, ToolErrorType
 
 
@@ -120,6 +125,8 @@ class ToolRegistry:
 
         # 步骤 2：使用 Pydantic 校验并转换输入；无效输入不会进入处理器。
         try:
+            # 阶段五：每次真正调用高德或 LLM 前检查持久化取消标记。
+            raise_if_task_cancelled()
             validated_input = definition.input_model.model_validate(payload)
         except ValidationError as exc:
             return self._failure(
@@ -131,6 +138,7 @@ class ToolRegistry:
             )
 
         try:
+            raise_if_task_cancelled()
             # 步骤 3：执行实际处理器，例如高德 API 或 PlannerAgent。
             output = (
                 self._call_injector.invoke(name, definition.handler, validated_input)
@@ -144,6 +152,9 @@ class ToolRegistry:
             if definition.output_model is not None:
                 output = definition.output_model.model_validate(output).model_dump()
         # 步骤 6：已知工具错误保留其错误类型、重试语义和供应商诊断。
+        except (TaskCancellationRequested, TaskLeaseLostError):
+            # 取消和租约丢失都是运行时控制信号，不能包装成可重试工具错误。
+            raise
         except ToolResultError as exc:
             return self._failure(
                 name,

@@ -251,6 +251,29 @@ class Settings:
         _env("AGENT_CIRCUIT_RECOVERY_TIMEOUT_SECONDS", "30") or "30"
     )
 
+    # 阶段五：SQLite 持久化任务队列、租约、心跳和 SSE 轮询参数。
+    TRIP_TASK_WORKER_ENABLED: bool = _env_bool(
+        "TRIP_TASK_WORKER_ENABLED", True
+    )
+    TRIP_TASK_WORKER_POLL_SECONDS: float = float(
+        _env("TRIP_TASK_WORKER_POLL_SECONDS", "0.5") or "0.5"
+    )
+    TRIP_TASK_LEASE_SECONDS: float = float(
+        _env("TRIP_TASK_LEASE_SECONDS", "30") or "30"
+    )
+    TRIP_TASK_HEARTBEAT_SECONDS: float = float(
+        _env("TRIP_TASK_HEARTBEAT_SECONDS", "5") or "5"
+    )
+    TRIP_TASK_SHUTDOWN_TIMEOUT_SECONDS: float = float(
+        _env("TRIP_TASK_SHUTDOWN_TIMEOUT_SECONDS", "3") or "3"
+    )
+    TRIP_TASK_SSE_POLL_SECONDS: float = float(
+        _env("TRIP_TASK_SSE_POLL_SECONDS", "0.5") or "0.5"
+    )
+    TRIP_TASK_SSE_HEARTBEAT_SECONDS: float = float(
+        _env("TRIP_TASK_SSE_HEARTBEAT_SECONDS", "15") or "15"
+    )
+
     # 高德 HTTP 超时配置：连接超时与读取超时。
     AMAP_HTTP_CONNECT_TIMEOUT: float = float(
         _env("AMAP_HTTP_CONNECT_TIMEOUT", "3.05") or "3.05"
