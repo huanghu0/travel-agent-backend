@@ -30,6 +30,7 @@ from app.memory import (
     SQLiteRestaurantCache,
     SQLiteRouteCache,
 )
+from app.schemas.execution_view_schema import TripExecutionView
 from app.schemas.trip_schema import TripPlanResponse, TripRequest
 from app.tools import ToolDescriptor, build_trip_tool_registry
 from app.tools.unsplash_tools import get_place_photo
@@ -418,6 +419,22 @@ def get_trip_session(session_id: str):
     try:
         # 直接读取最近一次 SQLite 检查点，不会重新执行任何工具。
         return agent_state_store.get_state(session_id)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/trip/sessions/{session_id}/execution-view",
+    summary="查询面向结果页的轻量行程执行视图",
+    response_model=TripExecutionView,
+)
+def get_trip_execution_view(session_id: str):
+    """仅返回行程展示、真实路线、时间轴和质量报告，不返回完整 AgentState。"""
+
+    try:
+        # 读取 SQLite 最近检查点后做只读投影，不触发工具或 LLM。
+        state = agent_state_store.get_state(session_id)
+        return TripExecutionView.from_agent_state(state)
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
