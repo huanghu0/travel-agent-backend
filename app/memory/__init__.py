@@ -16,6 +16,12 @@ from app.memory.models import (
 from app.memory.sqlite_restaurant_cache import SQLiteRestaurantCache
 from app.memory.sqlite_route_cache import SQLiteRouteCache
 from app.memory.sqlite_store import SessionNotFoundError, SQLiteAgentStateStore
+from app.memory.sqlite_trip_version_store import (
+    DraftConflictError,
+    DraftNotFoundError,
+    SQLiteTripVersionStore,
+    VersionNotFoundError,
+)
 
 __all__ = [
     "ActionCycleStats",
@@ -33,4 +39,8 @@ __all__ = [
     "SQLiteAgentStateStore",
     "SQLiteRestaurantCache",
     "SQLiteRouteCache",
+    "SQLiteTripVersionStore",
+    "DraftConflictError",
+    "DraftNotFoundError",
+    "VersionNotFoundError",
 ]

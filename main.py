@@ -29,9 +29,22 @@ from app.memory import (
     SQLiteAgentStateStore,
     SQLiteRestaurantCache,
     SQLiteRouteCache,
+    SQLiteTripVersionStore,
+    DraftConflictError,
+    DraftNotFoundError,
+    VersionNotFoundError,
 )
 from app.schemas.execution_view_schema import TripExecutionView
 from app.schemas.trip_schema import TripPlanResponse, TripRequest
+from app.schemas.trip_draft_schema import (
+    ConfirmDraftResponse,
+    DraftEvaluationResponse,
+    TripDraft,
+    TripDraftCreate,
+    TripDraftUpdate,
+    TripPlanVersion,
+)
+from app.services import TripDraftService
 from app.tools import ToolDescriptor, build_trip_tool_registry
 from app.tools.unsplash_tools import get_place_photo
 
@@ -57,6 +70,8 @@ app.add_middleware(
 planner_agent = PlannerAgent()
 # 步骤 2：SQLite 保存每次执行的 AgentState，支持查询、复盘和断点恢复。
 agent_state_store = SQLiteAgentStateStore(settings.AGENT_MEMORY_DB_PATH)
+# 编辑草稿与正式版本独立持久化，避免未确认修改覆盖原始智能体检查点。
+trip_version_store = SQLiteTripVersionStore(settings.AGENT_MEMORY_DB_PATH)
 route_cache = (
     SQLiteRouteCache(settings.AGENT_MEMORY_DB_PATH)
     if settings.AMAP_ROUTE_CACHE_ENABLED
@@ -191,6 +206,13 @@ trip_orchestrator = TripOrchestrator(
     checkpoint_retry_max_delay_seconds=(
         settings.AGENT_CHECKPOINT_RETRY_MAX_DELAY_SECONDS
     ),
+)
+# 草稿服务复用同一套工具注册表和确定性评估器，不额外创建 LLM 客户端。
+trip_draft_service = TripDraftService(
+    state_store=agent_state_store,
+    version_store=trip_version_store,
+    tool_registry=trip_tool_registry,
+    orchestrator=trip_orchestrator,
 )
 
 
@@ -436,6 +458,106 @@ def get_trip_execution_view(session_id: str):
         state = agent_state_store.get_state(session_id)
         return TripExecutionView.from_agent_state(state)
     except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/trip/sessions/{session_id}/drafts",
+    summary="创建行程编辑草稿",
+    response_model=TripDraft,
+)
+def create_trip_draft(session_id: str, payload: TripDraftCreate):
+    """以当前确认版本为基线创建草稿，不触发路线或 LLM 调用。"""
+    try:
+        return trip_draft_service.create_draft(session_id, payload)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DraftConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/trip/sessions/{session_id}/drafts/{draft_id}",
+    summary="查询行程草稿",
+    response_model=TripDraft,
+)
+def get_trip_draft(session_id: str, draft_id: str):
+    try:
+        return trip_version_store.get_draft(session_id, draft_id)
+    except DraftNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put(
+    "/api/trip/sessions/{session_id}/drafts/{draft_id}",
+    summary="更新行程编辑草稿",
+    response_model=TripDraft,
+)
+def update_trip_draft(session_id: str, draft_id: str, payload: TripDraftUpdate):
+    """继续修改同一草稿；旧候选版本会被标记为 superseded。"""
+    try:
+        return trip_draft_service.update_draft(session_id, draft_id, payload)
+    except (SessionNotFoundError, DraftNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DraftConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/trip/sessions/{session_id}/drafts/{draft_id}/evaluate",
+    summary="重新评估行程草稿",
+    response_model=DraftEvaluationResponse,
+)
+def evaluate_trip_draft(session_id: str, draft_id: str):
+    """只查询变化路线，然后重算时间轴、餐饮、约束与质量分。"""
+    try:
+        return trip_draft_service.evaluate_draft(session_id, draft_id)
+    except (SessionNotFoundError, DraftNotFoundError, VersionNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DraftConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/trip/sessions/{session_id}/drafts/{draft_id}/confirm",
+    summary="确认草稿候选版本",
+    response_model=ConfirmDraftResponse,
+)
+def confirm_trip_draft(session_id: str, draft_id: str):
+    """确认后才更新 AgentState，继续修改则保留原确认版本。"""
+    try:
+        return trip_draft_service.confirm_draft(session_id, draft_id)
+    except (SessionNotFoundError, DraftNotFoundError, VersionNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DraftConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/trip/sessions/{session_id}/versions",
+    summary="查询行程版本列表",
+    response_model=list[TripPlanVersion],
+)
+def list_trip_plan_versions(session_id: str):
+    # 先确认会话存在，避免对无效会话返回空列表造成歧义。
+    try:
+        agent_state_store.get_state(session_id)
+        return trip_version_store.list_versions(session_id)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/trip/sessions/{session_id}/versions/{version_number}",
+    summary="查询指定行程版本",
+    response_model=TripPlanVersion,
+)
+def get_trip_plan_version(session_id: str, version_number: int):
+    try:
+        return trip_version_store.get_version(session_id, version_number)
+    except VersionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
