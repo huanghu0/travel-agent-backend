@@ -63,12 +63,12 @@ MySQL Schema 校验（开发库）：通过
 MySQL Schema 校验（测试库）：通过
 ```
 
-## 5. 正式切换前待办
+## 5. 后续状态
 
-1. 为运行时 MySQL 最小权限账号配置本地凭据；
-2. 停止 API 和 Worker，形成短暂的 SQLite 停写窗口；
-3. 对最终 SQLite 快照再执行 execute 和 verify；
-4. 确认 `safe_to_cutover=true`；
-5. 将 `DATABASE_BACKEND` 改为 `mysql`；
-6. 重启并验证历史会话、异步任务、草稿版本、结果页和 SSE；
-7. 保留 SQLite 原库和迁移快照，暂不删除。
+上述正式切换步骤已于 2026-08-20 完成：最终批次逐行匹配 399/399，`safe_to_cutover=true`，本地 `.env` 已改为 `DATABASE_BACKEND=mysql`，MySQL API/Worker 运行链路已验收。
+
+完整结果和当前 `8000` 端口旧进程的重启说明见：
+
+```text
+docs/mysql-cutover-acceptance-2026-08-20.md
+```

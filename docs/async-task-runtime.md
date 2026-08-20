@@ -4,18 +4,18 @@
 
 阶段五把原来必须等待同步 HTTP 请求完成的旅行规划，升级为可持久化、可恢复、可取消的后台任务，同时保留 `POST /api/trip/plan` 兼容旧客户端。
 
-核心设计不是 FastAPI `BackgroundTasks`，而是 **SQLite 持久化队列 + Worker 租约 + AgentState 检查点 + 可回放 SSE 事件**。因此浏览器刷新、网络断开和服务进程重启都不会丢失任务身份或执行状态。
+核心设计不是 FastAPI `BackgroundTasks`，而是 **可切换持久化队列（当前为 MySQL）+ Worker 租约 + AgentState 检查点 + 可回放 SSE 事件**。因此浏览器刷新、网络断开和服务进程重启都不会丢失任务身份或执行状态。
 
 ## 2. 组件
 
 ```mermaid
 flowchart LR
-    A["前端创建任务"] -->|"POST /api/trip/tasks + Idempotency-Key"| B["SQLite trip_planning_tasks"]
+    A["前端创建任务"] -->|"POST /api/trip/tasks + Idempotency-Key"| B["MySQL trip_planning_tasks"]
     B --> C["TripTaskWorker 原子领取"]
     C --> D["TripOrchestrator"]
     D --> E["高德 / LLM 工具"]
-    D --> F["SQLite AgentState 检查点"]
-    C --> G["SQLite trip_task_events"]
+    D --> F["MySQL AgentState 检查点"]
+    C --> G["MySQL trip_task_events"]
     G -->|"SSE id + Last-Event-ID"| H["规划进度页"]
     H -->|"取消"| B
     C -->|"成功 result_session_id"| I["/result/:sessionId"]
@@ -61,7 +61,7 @@ GET /api/trip/tasks/{task_id}/events
 Last-Event-ID: <最后已消费事件 ID>
 ```
 
-也可使用 `after_event_id` 查询参数。事件 ID 来自 SQLite 自增主键，服务端只回放严格大于游标的事件，前端再用 event ID 集合做二次去重。
+也可使用 `after_event_id` 查询参数。事件 ID 来自当前持久化后端的单调自增主键（MySQL 使用 `BIGINT UNSIGNED AUTO_INCREMENT`），服务端只回放严格大于游标的事件，前端再用 event ID 集合做二次去重。
 
 ## 4. Worker 互斥与服务重启恢复
 

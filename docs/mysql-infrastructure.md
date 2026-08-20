@@ -1,8 +1,8 @@
-# MySQL 基础设施、五类 Store 与历史迁移（阶段 2～4）
+# MySQL 基础设施、五类 Store、历史迁移与正式切换（阶段 2～5）
 
 ## 1. 本阶段目标
 
-阶段 2 建立可重复、可检查的 MySQL 基础设施；阶段 3 实现五类业务 Store；阶段 4 增加 SQLite 历史迁移链路。当前完成：
+阶段 2 建立可重复、可检查的 MySQL 基础设施；阶段 3 实现五类业务 Store；阶段 4 增加 SQLite 历史迁移链路；阶段 5 完成正式切换和运行验收。当前完成：
 
 1. 增加 MySQL 连接配置和 SQLAlchemy 连接池；
 2. 定义七张业务表的 SQLAlchemy 元数据；
@@ -11,7 +11,8 @@
 5. 提供连接、迁移版本和物理 Schema 校验；
 6. 实现 AgentState、路线缓存、餐饮缓存、行程版本和异步任务五类 MySQL Store；
 7. 保持 SQLite 运行链路与回滚能力；
-8. 提供 SQLite → MySQL 的 dry-run、execute、verify、resume 和安全 rollback。
+8. 提供 SQLite → MySQL 的 dry-run、execute、verify、resume 和安全 rollback；
+9. 完成最终快照校验、MySQL 运行切换、API/Worker、SSE、幂等和取消验收。
 
 > `DATABASE_BACKEND=sqlite` 与 `DATABASE_BACKEND=mysql` 均已注册。首次切换 MySQL 前必须完成 Alembic、迁移和 verify；只有输出 `safe_to_cutover=true` 后才允许切换。
 
@@ -53,7 +54,8 @@ MYSQL_WRITE_TIMEOUT_SECONDS=30
 
 安全约束：
 
-- 密码只保存在已被 Git 忽略的本地 `.env`；
+- 密码只保存在已被 Git 忽略的本地 `.env.local`；
+- `app/core/config.py` 先加载 `.env`，再用 `.env.local` 覆盖敏感值；IDE/父进程中的旧密码不会覆盖本地密钥文件；
 - `alembic.ini`、`.env.example`、源码和文档均不保存密码；
 - 初始化阶段可使用本地管理员账号，正式运行前应创建最小权限的 `travel_agent_app` 账号；
 - 健康检查只输出主机、端口、数据库名，并擦除异常中的原始和 URL 编码密码。
@@ -197,17 +199,22 @@ alembic -x database=travel_agent_test upgrade head
 python scripts/check_mysql.py --database travel_agent_test
 ```
 
-## 9. 当前边界与下一阶段
+## 9. 阶段 5：正式切换状态与下一阶段
 
-阶段 4 已完成迁移工具，但正式切换仍保留以下边界：
+2026-08-20 已完成本地正式切换验收：
 
-- 必须在停写窗口对最终 SQLite 快照重新 execute 和 verify；
-- 不删除 SQLite，继续把它作为迁移来源和回滚后端；
-- 尚未接入 Redis；
-- 首次切换前必须确保开发库已执行 `alembic upgrade head` 并通过 `scripts/check_mysql.py`；
-- 只有 verify 返回 `safe_to_cutover=true` 后才允许修改 `DATABASE_BACKEND`。
+- 最终 SQLite 一致性快照共 399 条记录；
+- 最终迁移批次逐行匹配 399 条，`verified=true`、`safe_to_cutover=true`；
+- 本地 `.env` 已切换为 `DATABASE_BACKEND=mysql`；
+- MySQL API/内置 Worker 已通过历史会话、会话详情、 execution-view、任务查询、202 创建、幂等复用、排队取消、SSE 回放和服务重启验收；
+- MySQL 专用契约与并发测试 9/9 通过，完整确定性质量门通过；
+- SQLite 原库和最终快照继续保留，未删除、未覆盖。
 
-下一阶段是在停写窗口完成最终迁移与后端切换演练；稳定后再接入 Redis 通知和协调能力。
+当前边界：
+
+- Redis 尚未接入；下一阶段让 Redis 承担任务通知、取消/SSE 唤醒、短期缓存和分布式协调，MySQL 继续作为事实来源；
+- API 与 Worker 仍在同一 FastAPI 进程，生产部署前应拆分独立 Worker；
+- 本地已有的旧 API 进程必须重启后才会重新读取 `.env`，不能只修改文件而不重启进程。
 
 ## 10. 阶段 3：五类 MySQL Store
 
@@ -259,10 +266,11 @@ alembic upgrade head
 python scripts/check_mysql.py
 ```
 
-当前边界：
+当前状态：
 
-- SQLite 实现和数据文件仍保留，作为迁移来源与回滚后端；
-- SQLite → MySQL 迁移工具已实现，切换前必须保存批次报告并通过逐行 verify；
+- 本地运行配置已切换为 MySQL，启动时五类 Store 均由 MySQL 实现；
+- SQLite 实现和数据文件仍保留，作为迁移来源与紧急回滚后端；
+- 最终迁移报告已保存并通过逐行 verify；
 - 尚未接入 Redis；Redis 后续只承担任务通知、取消/SSE 唤醒、短期缓存和分布式协调，MySQL 继续作为事实来源。
 
 ## 12. SQLite 历史迁移

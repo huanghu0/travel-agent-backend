@@ -329,7 +329,7 @@ flowchart TD
 - 接入饮食禁忌、儿童餐、排队和预订等可选数据源。
 - 对远期天气明确返回“尚无可靠预报”，避免把当前天气当作未来天气。
 
-### 持久化演进：Store 抽象、MySQL 基础设施、五类 Store 与历史迁移（阶段一至四已完成）
+### 持久化演进：Store 抽象、MySQL Store、历史迁移与正式切换（阶段一至五已完成）
 
 阶段一已完成：
 
@@ -364,10 +364,18 @@ flowchart TD
 - verify 使用完整行摘要，只有 `safe_to_cutover=true` 才允许切换后端。
 - 2026-08-20 本地开发库已迁移并逐行验证 399 条历史记录；测试库完成 399 条 execute → verify → rollback 演练。
 
+阶段五已完成：
+
+- 为本地 `travel_agent_app` 配置最小业务读写权限；管理员密码只在交互式终端读取，应用密码仅写入被 Git 忽略的 `.env.local`，并覆盖 IDE/父进程中的陈旧变量。
+- 最终一致性快照迁移批次逐行验证 399/399，`safe_to_cutover=true`。
+- 本地运行配置已切换为 `DATABASE_BACKEND=mysql`，五类 Store 均通过 MySQL 工厂加载。
+- API/Worker 已通过历史会话、execution-view、任务查询、202 创建、幂等、取消、SSE 回放和重启验收。
+- MySQL 专用 Schema、Store、租约恢复和多 Worker 并发测试通过；SQLite 继续保留为回滚后端。
+
 下一步：
 
-- 在停写窗口执行最终增量快照迁移和切换演练，再将本地运行后端改为 MySQL。
-- MySQL 稳定后接入 Redis 任务通知、取消、SSE 唤醒和共享缓存；MySQL 继续作为事实来源。
+- 接入 Redis 任务通知、取消/SSE 唤醒、短期缓存和分布式协调；MySQL 继续作为事实来源。
+- 将内置 Worker 拆为独立进程，再进行多实例 API + 多 Worker 的容量和故障切换验收。
 
 ### 阶段六：受约束的自主决策层
 

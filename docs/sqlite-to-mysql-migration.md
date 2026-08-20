@@ -163,4 +163,4 @@ python scripts/migrate_sqlite_to_mysql.py rollback --batch-id <batch-id>
 
 ## 9. 凭据要求
 
-脚本只从本地 `.env` 读取 MySQL 凭据，不接受命令行密码参数，也不会在报告中输出用户名或密码。执行前确认 `MYSQL_PASSWORD` 已配置，并确保 `.env` 仍被 Git 忽略。
+脚本从本地 `.env` 和高优先级 `.env.local` 读取 MySQL 凭据，不接受命令行密码参数，也不会在报告中输出用户名或密码。执行前确认 `MYSQL_PASSWORD` 已在 `.env.local` 配置，并确保 `.env`、`.env.local` 均被 Git 忽略。

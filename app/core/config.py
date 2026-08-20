@@ -1,9 +1,14 @@
 import os
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# 先加载可共享的本地配置，再用被 Git 忽略的 .env.local 覆盖敏感值。
+# 这样 IDE 中尚未刷新的 .env 编辑缓冲区不会再次覆盖数据库应用密码。
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.local", override=True)
 
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
