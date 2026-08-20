@@ -89,6 +89,42 @@ class Settings:
         _env("MYSQL_WRITE_TIMEOUT_SECONDS", "30") or "30"
     )
 
+    # Redis 仅作为可选加速与协调层；关闭或故障时必须回退 MySQL/SQLite。
+    REDIS_ENABLED: bool = _env_bool("REDIS_ENABLED", False)
+    REDIS_HOST: str = _env("REDIS_HOST", "127.0.0.1") or "127.0.0.1"
+    REDIS_PORT: int = int(_env("REDIS_PORT", "6379") or "6379")
+    REDIS_DB: int = int(_env("REDIS_DB", "0") or "0")
+    REDIS_USERNAME: Optional[str] = _env("REDIS_USERNAME")
+    REDIS_PASSWORD: Optional[str] = _env("REDIS_PASSWORD")
+    REDIS_SSL: bool = _env_bool("REDIS_SSL", False)
+    REDIS_MAX_CONNECTIONS: int = int(
+        _env("REDIS_MAX_CONNECTIONS", "20") or "20"
+    )
+    REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: float = float(
+        _env("REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS", "3") or "3"
+    )
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = float(
+        _env("REDIS_SOCKET_TIMEOUT_SECONDS", "5") or "5"
+    )
+    REDIS_HEALTH_CHECK_INTERVAL_SECONDS: int = int(
+        _env("REDIS_HEALTH_CHECK_INTERVAL_SECONDS", "30") or "30"
+    )
+    REDIS_RETRY_ON_TIMEOUT: bool = _env_bool("REDIS_RETRY_ON_TIMEOUT", True)
+    REDIS_DECODE_RESPONSES: bool = _env_bool("REDIS_DECODE_RESPONSES", False)
+    REDIS_CLIENT_NAME: str = (
+        _env("REDIS_CLIENT_NAME", "travel-agent-backend")
+        or "travel-agent-backend"
+    )
+    REDIS_KEY_PREFIX: str = (
+        _env("REDIS_KEY_PREFIX", "travel-agent:dev") or "travel-agent:dev"
+    )
+    REDIS_DEFAULT_TTL_SECONDS: int = int(
+        _env("REDIS_DEFAULT_TTL_SECONDS", "1800") or "1800"
+    )
+    REDIS_DEGRADE_COOLDOWN_SECONDS: float = float(
+        _env("REDIS_DEGRADE_COOLDOWN_SECONDS", "5") or "5"
+    )
+
     # AgentState 持久化检查点与有界确定性执行循环。
     AGENT_MEMORY_DB_PATH: str = _env(
         "AGENT_MEMORY_DB_PATH", "data/agent_memory.db"

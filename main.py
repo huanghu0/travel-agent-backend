@@ -25,6 +25,7 @@ from app.evaluation import (
     FIXED_ACCEPTANCE_SCENARIOS,
     FixedAcceptanceBaselineReport,
 )
+from app.infrastructure.redis import RedisClientManager, RedisConfig
 from app.memory import (
     AgentSessionSummary,
     ExecutionBaselineReport,
@@ -60,6 +61,10 @@ from app.task_runtime.worker import TripTaskWorker, WorkerSettings
 from app.tools import ToolDescriptor, build_trip_tool_registry
 from app.tools.unsplash_tools import get_place_photo
 
+
+# Redis 是可选加速层：初始化连接池管理器不会立即建立网络连接。
+redis_client_manager = RedisClientManager(RedisConfig.from_settings(settings))
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """应用启动时恢复持久化任务队列，关闭时停止领取新任务。"""
@@ -71,6 +76,8 @@ async def lifespan(_: FastAPI):
     finally:
         if settings.TRIP_TASK_WORKER_ENABLED:
             trip_task_worker.stop()
+        # Redis 属于可选加速层，关闭失败不能阻塞应用退出。
+        redis_client_manager.close()
 
 
 # 初始化FastAPI应用
@@ -768,7 +775,14 @@ def resume_trip_session(session_id: str):
 # 健康检查
 @app.get("/api/health", summary="服务健康检查")
 def health_check():
-    return {"status": "ok", "message": "旅行助手服务运行正常"}
+    # Redis 是非关键组件：不可用时报告 degraded，但主服务继续通过健康检查。
+    redis_health = redis_client_manager.check_health()
+    return {
+        "status": "ok",
+        "message": "旅行助手服务运行正常",
+        "degraded": redis_health.degraded,
+        "components": {"redis": redis_health.model_dump()},
+    }
 
 
 if __name__ == "__main__":

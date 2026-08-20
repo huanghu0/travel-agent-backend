@@ -12,3 +12,4 @@ python-multipart>=0.0.6
 SQLAlchemy==2.0.48
 PyMySQL==1.2.0
 alembic==1.18.4
+redis==5.2.1

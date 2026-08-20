@@ -372,9 +372,20 @@ flowchart TD
 - API/Worker 已通过历史会话、execution-view、任务查询、202 创建、幂等、取消、SSE 回放和重启验收。
 - MySQL 专用 Schema、Store、租约恢复和多 Worker 并发测试通过；SQLite 继续保留为回滚后端。
 
+Redis 阶段一已完成：
+
+- 新增 Redis 可选配置、线程安全连接池、连接/命令超时和应用关闭清理。
+- `/api/health` 已展示 Redis 的 `ok`、`disabled` 或 `degraded` 组件状态。
+- Redis 连接失败时进入短暂冷却并返回调用方 fallback，不中断 MySQL/SQLite 主链路。
+- 建立统一 Key 前缀、可信标识符校验和复杂查询 SHA-256 摘要规则，避免在 Key 中暴露地址与偏好原文。
+- 增加独立 Redis 健康检查脚本、密码擦除、故障恢复和本机 6379 Live 验收。
+- 当前尚未把路线、餐饮、异步任务和 SSE 业务数据写入 Redis；MySQL 仍是唯一事实来源。
+
 下一步：
 
-- 接入 Redis 任务通知、取消/SSE 唤醒、短期缓存和分布式协调；MySQL 继续作为事实来源。
+- 实现 `CacheStore`、`RedisCacheStore` 和 `NoOpCacheStore`，建立缓存 schema version、TTL 与序列化规范。
+- 在通用缓存层稳定后，按 Redis L1 → MySQL L2 → 高德 Provider 顺序接入路线和餐饮缓存。
+- 再接入任务通知、取消/SSE 唤醒、共享限流和分布式协调。
 - 将内置 Worker 拆为独立进程，再进行多实例 API + 多 Worker 的容量和故障切换验收。
 
 ### 阶段六：受约束的自主决策层
