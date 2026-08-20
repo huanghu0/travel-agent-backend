@@ -403,6 +403,15 @@ class AmapProviderClient:
         total_received = 0
         cache_hits = 0
         cache_misses = 0
+        l1_cache_hits = 0
+        l1_cache_misses = 0
+        l1_cache_degraded = 0
+        l2_cache_hits = 0
+        l2_cache_misses = 0
+        l2_cache_errors = 0
+        provider_calls = 0
+        provider_calls_avoided_by_l1 = 0
+        provider_calls_avoided_by_l2 = 0
 
         for anchor in selected:
             cache_key = restaurant_search_cache_key(
@@ -414,12 +423,30 @@ class AmapProviderClient:
             )
             snapshot = snapshots.get(cache_key)
             if snapshot is None:
-                snapshot = self._restaurant_cache_get(cache_key)
+                snapshot, cache_source, l1_status, l2_status = (
+                    self._restaurant_cache_get(cache_key)
+                )
                 if snapshot is not None:
                     cache_hits += 1
+                    if cache_source == "l1":
+                        l1_cache_hits += 1
+                        provider_calls_avoided_by_l1 += 1
+                    elif cache_source == "l2":
+                        l2_cache_hits += 1
+                        provider_calls_avoided_by_l2 += 1
                 else:
                     if self.restaurant_cache is not None:
                         cache_misses += 1
+                    if l1_status in {"miss", "invalid"}:
+                        l1_cache_misses += 1
+                    elif l1_status == "degraded":
+                        l1_cache_degraded += 1
+                    if l2_status == "miss":
+                        l2_cache_misses += 1
+                    elif l2_status == "error":
+                        l2_cache_errors += 1
+                    provider_calls += 1
+                    self._record_provider_call(self.restaurant_cache)
                     raw = self.raw_client.around_search(
                         location=anchor.location,
                         city=city,
@@ -457,22 +484,47 @@ class AmapProviderClient:
             total_received=total_received,
             cache_hits=cache_hits,
             cache_misses=cache_misses,
+            l1_cache_hits=l1_cache_hits,
+            l1_cache_misses=l1_cache_misses,
+            l1_cache_degraded=l1_cache_degraded,
+            l1_cache_hit_rate=(
+                l1_cache_hits / (l1_cache_hits + l1_cache_misses)
+                if l1_cache_hits + l1_cache_misses
+                else 0.0
+            ),
+            l2_cache_hits=l2_cache_hits,
+            l2_cache_misses=l2_cache_misses,
+            l2_cache_errors=l2_cache_errors,
+            l2_cache_hit_rate=(
+                l2_cache_hits / (l2_cache_hits + l2_cache_misses)
+                if l2_cache_hits + l2_cache_misses
+                else 0.0
+            ),
+            provider_calls=provider_calls,
+            provider_calls_avoided_by_l1=provider_calls_avoided_by_l1,
+            provider_calls_avoided_by_l2=provider_calls_avoided_by_l2,
             candidates=candidates,
         )
 
     def _restaurant_cache_get(
         self,
         cache_key: str,
-    ) -> RestaurantSearchSnapshot | None:
-        """缓存异常只降级为实时查询，不能阻断餐饮工具主流程。"""
+    ) -> tuple[RestaurantSearchSnapshot | None, str, str, str]:
+        """读取餐饮缓存，并返回值、命中层及两层状态。"""
 
         if self.restaurant_cache is None:
-            return None
+            return None, "disabled", "skipped", "skipped"
         try:
-            return self.restaurant_cache.get(cache_key)
+            lookup = getattr(self.restaurant_cache, "lookup", None)
+            if callable(lookup):
+                result = lookup(cache_key)
+                source = getattr(result.source, "value", str(result.source))
+                return result.value, source, result.l1_status, result.l2_status
+            cached = self.restaurant_cache.get(cache_key)
+            return cached, ("legacy" if cached is not None else "miss"), "skipped", "skipped"
         except Exception:
             logger.warning("Restaurant cache read failed", exc_info=True)
-            return None
+            return None, "miss", "degraded", "error"
 
     def _restaurant_cache_set(
         self,
@@ -690,18 +742,39 @@ class AmapProviderClient:
         self,
         cache_key: str,
         leg: RouteLegRequest,
-    ) -> RouteEstimate | None:
+    ) -> tuple[RouteEstimate | None, str, str, str]:
+        """读取路线缓存，并保留 L1/L2 来源用于请求级指标。"""
+
         if self.route_cache is None:
-            return None
+            return None, "disabled", "skipped", "skipped"
         try:
+            lookup = getattr(self.route_cache, "lookup", None)
+            if callable(lookup):
+                result = lookup(cache_key)
+                source = getattr(result.source, "value", str(result.source))
+                cached = result.value
+                return (
+                    self._bind_cached_route(cached, leg) if cached is not None else None,
+                    source,
+                    result.l1_status,
+                    result.l2_status,
+                )
             cached = self.route_cache.get(cache_key)
         except Exception:
             # 路线缓存只是性能优化，缓存故障不能阻断旅行规划主流程。
             logger.warning("Route cache read failed", exc_info=True)
-            return None
+            return None, "miss", "degraded", "error"
         if cached is None:
-            return None
-        return self._bind_cached_route(cached, leg)
+            return None, "miss", "skipped", "skipped"
+        return self._bind_cached_route(cached, leg), "legacy", "skipped", "skipped"
+
+    @staticmethod
+    def _record_provider_call(cache: Any) -> None:
+        """让分层缓存累计真实 Provider 调用；旧缓存实现无需感知。"""
+
+        recorder = getattr(cache, "record_provider_call", None)
+        if callable(recorder):
+            recorder()
 
     def _cache_set(self, cache_key: str, estimate: RouteEstimate) -> None:
         if self.route_cache is None:
@@ -763,20 +836,47 @@ class AmapProviderClient:
         estimates: list[RouteEstimate] = []
         cache_hits = 0
         cache_misses = 0
+        l1_cache_hits = 0
+        l1_cache_misses = 0
+        l1_cache_degraded = 0
+        l2_cache_hits = 0
+        l2_cache_misses = 0
+        l2_cache_errors = 0
+        provider_calls = 0
+        provider_calls_avoided_by_l1 = 0
+        provider_calls_avoided_by_l2 = 0
 
         for original_leg in selected:
             cache_key: str | None = None
             try:
                 leg = self._prepare_leg(city, original_leg)
                 cache_key = route_leg_cache_key(leg)
-                cached = self._cache_get(cache_key, leg)
+                cached, cache_source, l1_status, l2_status = self._cache_get(
+                    cache_key, leg
+                )
                 if cached is not None:
                     cache_hits += 1
+                    if cache_source == "l1":
+                        l1_cache_hits += 1
+                        provider_calls_avoided_by_l1 += 1
+                    elif cache_source == "l2":
+                        l2_cache_hits += 1
+                        provider_calls_avoided_by_l2 += 1
                     estimates.append(cached)
                     continue
                 if self.route_cache is not None:
                     cache_misses += 1
+                if l1_status in {"miss", "invalid"}:
+                    l1_cache_misses += 1
+                elif l1_status == "degraded":
+                    l1_cache_degraded += 1
+                if l2_status == "miss":
+                    l2_cache_misses += 1
+                elif l2_status == "error":
+                    l2_cache_errors += 1
 
+                provider_calls += 1
+                self._record_provider_call(self.route_cache)
                 raw = self.raw_client.route(
                     origin=leg.origin.location,
                     destination=leg.destination.location,
@@ -806,6 +906,25 @@ class AmapProviderClient:
             truncated_legs=max(0, len(legs) - len(selected)),
             cache_hits=cache_hits,
             cache_misses=cache_misses,
+            l1_cache_hits=l1_cache_hits,
+            l1_cache_misses=l1_cache_misses,
+            l1_cache_degraded=l1_cache_degraded,
+            l1_cache_hit_rate=(
+                l1_cache_hits / (l1_cache_hits + l1_cache_misses)
+                if l1_cache_hits + l1_cache_misses
+                else 0.0
+            ),
+            l2_cache_hits=l2_cache_hits,
+            l2_cache_misses=l2_cache_misses,
+            l2_cache_errors=l2_cache_errors,
+            l2_cache_hit_rate=(
+                l2_cache_hits / (l2_cache_hits + l2_cache_misses)
+                if l2_cache_hits + l2_cache_misses
+                else 0.0
+            ),
+            provider_calls=provider_calls,
+            provider_calls_avoided_by_l1=provider_calls_avoided_by_l1,
+            provider_calls_avoided_by_l2=provider_calls_avoided_by_l2,
             failed_legs=sum(not estimate.available for estimate in estimates),
             routes=estimates,
         )

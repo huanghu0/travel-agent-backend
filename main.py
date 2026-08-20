@@ -27,6 +27,10 @@ from app.evaluation import (
 )
 from app.infrastructure.cache import CacheConfig, create_cache_store
 from app.infrastructure.redis import RedisClientManager, RedisConfig
+from app.providers.amap.layered_cache import (
+    LayeredRestaurantCache,
+    LayeredRouteCache,
+)
 from app.memory import (
     AgentSessionSummary,
     ExecutionBaselineReport,
@@ -118,15 +122,39 @@ persistence_stores = create_persistence_stores(
 )
 agent_state_store = persistence_stores.agent_state_store
 trip_version_store = persistence_stores.trip_version_store
-route_cache = persistence_stores.route_cache
-restaurant_cache = persistence_stores.restaurant_cache
-# 步骤 3：注册工具白名单。景点、天气、酒店直接调用高德，不经过 LLM。
+route_cache_l2 = persistence_stores.route_cache
+restaurant_cache_l2 = persistence_stores.restaurant_cache
+# 步骤 3：为高德路线和餐饮建立 Redis L1 → 数据库 L2 分层缓存。
+# Redis 关闭或故障时由 NoOp/降级结果自动绕过，MySQL/SQLite L2 仍可继续工作。
+route_cache = (
+    LayeredRouteCache(
+        l1_cache=cache_store,
+        l2_cache=route_cache_l2,
+        l1_key_builder=lambda cache_key: redis_client_manager.key_builder.literal(
+            "cache", "route", cache_key
+        ),
+    )
+    if route_cache_l2 is not None
+    else None
+)
+restaurant_cache = (
+    LayeredRestaurantCache(
+        l1_cache=cache_store,
+        l2_cache=restaurant_cache_l2,
+        l1_key_builder=lambda cache_key: redis_client_manager.key_builder.literal(
+            "cache", "restaurant", cache_key
+        ),
+    )
+    if restaurant_cache_l2 is not None
+    else None
+)
+# 步骤 4：注册工具白名单。景点、天气、酒店直接调用高德，不经过 LLM。
 trip_tool_registry = build_trip_tool_registry(
     planner_agent=planner_agent,
     route_cache=route_cache,
     restaurant_cache=restaurant_cache,
 )
-# 步骤 4：编排器负责按固定状态机循环执行，并统一应用预算、重试和熔断策略。
+# 步骤 5：编排器负责按固定状态机循环执行，并统一应用预算、重试和熔断策略。
 trip_orchestrator = TripOrchestrator(
     tool_registry=trip_tool_registry,
     max_steps=settings.AGENT_MAX_STEPS,
@@ -796,6 +824,18 @@ def health_check():
                 "enabled": cache_store.enabled,
                 "schema_version": cache_store.schema_version,
                 "metrics": cache_metrics.model_dump(),
+                "layers": {
+                    "route": (
+                        route_cache.metrics_snapshot().model_dump()
+                        if route_cache is not None
+                        else None
+                    ),
+                    "restaurant": (
+                        restaurant_cache.metrics_snapshot().model_dump()
+                        if restaurant_cache is not None
+                        else None
+                    ),
+                },
             },
         },
     }

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from datetime import timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
-from app.persistence.interfaces import RestaurantCacheStore
+from app.persistence.interfaces import CacheStoreEntry, RestaurantCacheStore
 from app.persistence.mysql_base import MySQLStoreBase, as_utc, mysql_utc, utc_now
 from app.persistence.sqlalchemy_models import RestaurantCacheRow
 from app.providers.amap.models import RestaurantSearchSnapshot
@@ -19,6 +20,14 @@ class MySQLRestaurantCache(MySQLStoreBase, RestaurantCacheStore):
     table = RestaurantCacheRow.__table__
 
     def get(self, cache_key: str) -> RestaurantSearchSnapshot | None:
+        entry = self.get_entry(cache_key)
+        return entry.value if entry is not None else None
+
+    def get_entry(
+        self, cache_key: str
+    ) -> CacheStoreEntry[RestaurantSearchSnapshot] | None:
+        """读取 L2 条目及剩余 TTL，避免回填 Redis 时延长原始有效期。"""
+
         now = utc_now()
         with self.engine.begin() as connection:
             row = connection.execute(
@@ -28,10 +37,16 @@ class MySQLRestaurantCache(MySQLStoreBase, RestaurantCacheStore):
             ).mappings().one_or_none()
             if row is None:
                 return None
-            if as_utc(row["expires_at"]) <= now:
+            expires_at = as_utc(row["expires_at"])
+            if expires_at <= now:
                 connection.execute(delete(self.table).where(self.table.c.cache_key == cache_key))
                 return None
-            return RestaurantSearchSnapshot.model_validate_json(row["snapshot_json"])
+            return CacheStoreEntry(
+                value=RestaurantSearchSnapshot.model_validate_json(row["snapshot_json"]),
+                remaining_ttl_seconds=max(
+                    1, math.ceil((expires_at - now).total_seconds())
+                ),
+            )
 
     def set(
         self,

@@ -27,7 +27,7 @@ flowchart TD
     C --> H["路线、通勤、时间轴、约束、内容优化器"]
     C --> I["TripPlanValidator"]
     C --> J["SQLite 会话记忆"]
-    F --> K["SQLite 路线缓存"]
+    F --> K["Redis L1 → MySQL L2 路线/餐饮缓存"]
     I -->|通过| L["返回 TripPlanResponse"]
     I -->|可修复| C
 ```
@@ -372,7 +372,7 @@ flowchart TD
 - API/Worker 已通过历史会话、execution-view、任务查询、202 创建、幂等、取消、SSE 回放和重启验收。
 - MySQL 专用 Schema、Store、租约恢复和多 Worker 并发测试通过；SQLite 继续保留为回滚后端。
 
-Redis 阶段一与阶段二已完成：
+Redis 阶段一至阶段三已完成：
 
 - 新增 Redis 可选配置、线程安全连接池、连接/命令超时和应用关闭清理。
 - Redis 连接失败时进入短暂冷却并返回调用方 fallback，不中断 MySQL/SQLite 主链路。
@@ -383,12 +383,14 @@ Redis 阶段一与阶段二已完成：
 - Redis 故障返回显式 `degraded`，缓存关闭返回 `bypass/skipped`，不会把缓存异常升级为旅行规划失败。
 - 增加命中、未命中、绕过、降级、损坏、过期、写入和删除指标；`/api/health` 已展示缓存 backend、版本和指标快照。
 - Redis 检查脚本支持唯一 Key 的版本化 JSON set/get/TTL/delete 冒烟测试，并已通过本机 6379 Live 验收。
-- 当前尚未把路线、餐饮、异步任务和 SSE 业务数据写入 Redis；MySQL 仍是唯一事实来源。
+- 高德路线与餐饮候选已按 Redis L1 → MySQL L2 → Provider 接入；L2 命中按剩余 TTL 回填 L1，Redis 故障自动降级。
+- 路线和餐饮结果及 `/api/health` 已暴露 L1/L2 命中率、Provider 实际调用次数，以及 L1/L2 避免进入 Provider 链路的次数。
+- 异步任务事实数据和 SSE 事件仍只保存在 MySQL；Redis 尚未承担任务通知与协调。
 
 下一步：
 
-- 按 Redis L1 → MySQL L2 → 高德 Provider 顺序接入路线和餐饮缓存，并统计分层命中率与节省的 Provider 调用量。
-- 再接入任务通知、取消/SSE 唤醒、共享限流和分布式协调。
+- 接入任务通知、取消/SSE 唤醒、共享限流和分布式协调。
+- 把当前进程内分层缓存指标接入 Prometheus/OpenTelemetry，支持多实例聚合。
 - 将内置 Worker 拆为独立进程，再进行多实例 API + 多 Worker 的容量和故障切换验收。
 
 ### 阶段六：受约束的自主决策层

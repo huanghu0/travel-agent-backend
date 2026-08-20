@@ -1,4 +1,4 @@
-# Redis 通用缓存基础设施（阶段一与阶段二）
+# Redis 通用缓存与高德分层缓存（阶段一至阶段三）
 
 更新日期：2026-08-20
 
@@ -9,9 +9,9 @@ Redis 是旅行智能体的可选 L1 加速与协调层，不是业务事实来�
 - MySQL 保存 AgentState、行程版本、异步任务、Worker 租约、SSE 事件以及持久化路线/餐饮缓存；
 - Redis 负责可丢失、可重建的热数据；
 - Redis 关闭或故障时，业务继续回退 MySQL/Provider；
-- 当前阶段完成通用缓存抽象，尚未把路线和餐饮查询切换到 Redis L1。
+- 高德路线与餐饮候选已接入 Redis L1；Redis 未命中时读取数据库 L2，最后才调用高德 Provider。
 
-后续业务读取链路统一为：
+当前业务读取链路为：
 
 ```text
 Redis L1 → MySQL L2 → 高德 Provider
@@ -125,7 +125,7 @@ metrics = cache_store.metrics_snapshot()
 5. TTL 必须是整数秒，布尔值和浮点数不接受；
 6. Redis 原生 TTL 与信封中的绝对 `expires_at` 双重限制陈旧数据。
 
-默认最大 TTL 是 604800 秒（7 天）。具体路线、餐饮、天气等业务接入时仍应声明更短的领域 TTL。
+默认最大 TTL 是 604800 秒（7 天）。路线继续使用成功/不可用分段的原领域 TTL，餐饮继续使用餐饮快照 TTL。L2 命中回填 Redis 时使用数据库条目的**剩余 TTL**，不会重新使用完整 TTL 延长陈旧数据寿命。
 
 ## 7. 指标
 
@@ -138,6 +138,17 @@ metrics = cache_store.metrics_snapshot()
 - `hit_rate = hits / (hits + misses)`，bypass 与 degraded 不进入命中率分母。
 
 指标不记录 Key、地址、偏好或缓存内容。当前为单进程计数，后续可映射到 OpenTelemetry/Prometheus。
+
+路线和餐饮各自增加领域分层指标：
+
+- `l1_hits / l1_misses / l1_hit_rate`：Redis L1 命中、未命中与命中率；
+- `l2_hits / l2_misses / l2_hit_rate`：MySQL/SQLite L2 命中、未命中与命中率；
+- `provider_calls`：真实调用高德路线或周边餐饮接口的次数；
+- `provider_calls_avoided_by_l1`：由 Redis 直接返回、没有继续进入 L2/Provider 的次数；
+- `provider_calls_avoided_by_l2`：Redis 未命中但数据库命中、没有调用 Provider 的次数；
+- Redis 绕过、降级和领域 payload 损坏不进入 L1 命中率分母，L2 读取异常不进入 L2 命中率分母。
+
+`provider_calls_avoided_by_l1` 是“Redis 帮助避免继续进入 Provider 链路”的可观测计数；严格来说，若没有 Redis，其中一部分请求仍可能命中 MySQL，因此同时保留 L2 避免调用量，避免错误归因。
 
 ## 8. Key 规范
 
@@ -166,7 +177,7 @@ GET /api/health
 响应的 `components` 同时包含：
 
 - `redis`：连接健康、目标、延迟和降级状态；
-- `cache`：当前 backend、enabled、schema version 和缓存指标。
+- `cache`：当前 backend、enabled、schema version、通用缓存指标，以及 `layers.route`、`layers.restaurant` 的 L1/L2/Provider 分层指标。
 
 Redis 不可用时顶层服务仍返回 `status=ok`，并使用 `degraded=true` 表示非关键组件降级。
 
@@ -189,13 +200,32 @@ Redis 不可用时顶层服务仍返回 `status=ok`，并使用 `degraded=true` 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest tests.test_redis_infrastructure -v
 .\.venv\Scripts\python.exe -m unittest tests.test_cache_infrastructure -v
+.\.venv\Scripts\python.exe -m unittest tests.test_layered_amap_cache -v
 .\.venv\Scripts\python.exe scripts\check_redis.py --require-enabled --cache-smoke-test
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-## 11. 下一阶段
+## 11. 高德路线与餐饮分层缓存
 
-- 将高德路线缓存接入 Redis L1 → MySQL L2 → Provider；
-- 将餐饮候选缓存接入相同分层，并保持各自领域 TTL；
-- 增加 L1/L2 分层命中率和 Provider 节省调用量；
-- 再接入任务通知、取消/SSE 唤醒、共享限流和分布式协调。
+`app/providers/amap/layered_cache.py` 提供 `LayeredRouteCache` 和 `LayeredRestaurantCache`：
+
+1. 先读取 Redis L1；
+2. L1 未命中、关闭或故障时读取数据库 L2；
+3. L2 命中后按剩余 TTL 回填 Redis；
+4. 两层均未命中才调用高德 Provider；
+5. Provider 成功后分别写入 L2 和 L1，任一缓存写失败都不改变 Provider 成功结果；
+6. Redis payload 领域结构错误时删除 L1 条目并回退 L2；
+7. MySQL/SQLite L2 读取失败时继续 Provider，避免缓存故障阻断规划。
+
+Redis Key 沿用已有 SHA-256 业务缓存键，不写入地址或坐标原文：
+
+```text
+travel-agent:dev:cache:route:{route_cache_sha256}
+travel-agent:dev:cache:restaurant:{restaurant_cache_sha256}
+```
+
+## 12. 下一阶段
+
+- 接入任务通知、取消/SSE 唤醒，降低 Worker 和前端轮询延迟；
+- 增加共享限流和分布式协调；
+- 将进程内指标映射到 Prometheus/OpenTelemetry，支持多实例聚合。

@@ -29,6 +29,17 @@ class RouteExecutionSummary(BaseModel):
     truncated_legs: int = Field(default=0, ge=0)
     cache_hits: int = Field(default=0, ge=0)
     cache_misses: int = Field(default=0, ge=0)
+    l1_cache_hits: int = Field(default=0, ge=0)
+    l1_cache_misses: int = Field(default=0, ge=0)
+    l1_cache_degraded: int = Field(default=0, ge=0)
+    l1_cache_hit_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    l2_cache_hits: int = Field(default=0, ge=0)
+    l2_cache_misses: int = Field(default=0, ge=0)
+    l2_cache_errors: int = Field(default=0, ge=0)
+    l2_cache_hit_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    provider_calls: int = Field(default=0, ge=0)
+    provider_calls_avoided_by_l1: int = Field(default=0, ge=0)
+    provider_calls_avoided_by_l2: int = Field(default=0, ge=0)
     failed_legs: int = Field(default=0, ge=0)
 
 
@@ -83,6 +94,23 @@ class TripExecutionView(BaseModel):
             truncated_legs=_non_negative_int(raw_routes.get("truncated_legs")),
             cache_hits=_non_negative_int(raw_routes.get("cache_hits")),
             cache_misses=_non_negative_int(raw_routes.get("cache_misses")),
+            l1_cache_hits=_non_negative_int(raw_routes.get("l1_cache_hits")),
+            l1_cache_misses=_non_negative_int(raw_routes.get("l1_cache_misses")),
+            l1_cache_degraded=_non_negative_int(
+                raw_routes.get("l1_cache_degraded")
+            ),
+            l1_cache_hit_rate=_unit_float(raw_routes.get("l1_cache_hit_rate")),
+            l2_cache_hits=_non_negative_int(raw_routes.get("l2_cache_hits")),
+            l2_cache_misses=_non_negative_int(raw_routes.get("l2_cache_misses")),
+            l2_cache_errors=_non_negative_int(raw_routes.get("l2_cache_errors")),
+            l2_cache_hit_rate=_unit_float(raw_routes.get("l2_cache_hit_rate")),
+            provider_calls=_non_negative_int(raw_routes.get("provider_calls")),
+            provider_calls_avoided_by_l1=_non_negative_int(
+                raw_routes.get("provider_calls_avoided_by_l1")
+            ),
+            provider_calls_avoided_by_l2=_non_negative_int(
+                raw_routes.get("provider_calls_avoided_by_l2")
+            ),
             failed_legs=_non_negative_int(raw_routes.get("failed_legs")),
         )
 
@@ -135,3 +163,12 @@ def _non_negative_int(value: object) -> int:
         return max(0, int(value or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _unit_float(value: object) -> float:
+    """旧会话命中率异常时裁剪到 0～1。"""
+
+    try:
+        return max(0.0, min(1.0, float(value or 0.0)))
+    except (TypeError, ValueError):
+        return 0.0

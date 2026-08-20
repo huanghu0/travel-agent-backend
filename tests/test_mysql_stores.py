@@ -184,7 +184,10 @@ class MySQLStoreIntegrationTests(unittest.TestCase):
             duration_seconds=900,
         )
         route_cache.set("route-key", estimate, ttl_seconds=3600)
-        self.assertEqual(route_cache.get("route-key").distance_meters, 1200)
+        route_entry = route_cache.get_entry("route-key")
+        self.assertEqual(route_entry.value.distance_meters, 1200)
+        self.assertGreater(route_entry.remaining_ttl_seconds, 0)
+        self.assertLessEqual(route_entry.remaining_ttl_seconds, 3600)
 
         snapshot = RestaurantSearchSnapshot(
             query_city="杭州",
@@ -202,7 +205,10 @@ class MySQLStoreIntegrationTests(unittest.TestCase):
             ],
         )
         restaurant_cache.set("food-key", snapshot, ttl_seconds=3600)
-        self.assertEqual(restaurant_cache.get("food-key").candidates[0].name, "湖畔餐厅")
+        restaurant_entry = restaurant_cache.get_entry("food-key")
+        self.assertEqual(restaurant_entry.value.candidates[0].name, "湖畔餐厅")
+        self.assertGreater(restaurant_entry.remaining_ttl_seconds, 0)
+        self.assertLessEqual(restaurant_entry.remaining_ttl_seconds, 3600)
 
         service = TripDraftService(
             state_store=state_store,

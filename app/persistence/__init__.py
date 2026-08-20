@@ -19,6 +19,7 @@ from app.persistence.exceptions import (
 from app.persistence.factory import PersistenceStores, create_persistence_stores
 from app.persistence.interfaces import (
     AgentStateStore,
+    CacheStoreEntry,
     RestaurantCacheStore,
     RouteCacheStore,
     TripTaskStore,
@@ -28,6 +29,7 @@ from app.persistence.schema_validation import MySQLSchemaValidation, validate_my
 
 __all__ = [
     "AgentStateStore",
+    "CacheStoreEntry",
     "DatabaseHealth",
     "MySQLDatabaseConfig",
     "MySQLSchemaValidation",

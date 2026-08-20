@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.persistence.interfaces import RestaurantCacheStore
+from app.persistence.interfaces import CacheStoreEntry, RestaurantCacheStore
 from app.providers.amap.models import RestaurantSearchSnapshot
 
 
@@ -61,6 +62,14 @@ class SQLiteRestaurantCache(RestaurantCacheStore):
             )
 
     def get(self, cache_key: str) -> RestaurantSearchSnapshot | None:
+        entry = self.get_entry(cache_key)
+        return entry.value if entry is not None else None
+
+    def get_entry(
+        self, cache_key: str
+    ) -> CacheStoreEntry[RestaurantSearchSnapshot] | None:
+        """读取 L2 条目及剩余 TTL，供 Redis L1 安全回填。"""
+
         now = datetime.now(timezone.utc)
         with self._connection() as connection:
             row = connection.execute(
@@ -83,7 +92,12 @@ class SQLiteRestaurantCache(RestaurantCacheStore):
                     (cache_key,),
                 )
                 return None
-            return RestaurantSearchSnapshot.model_validate_json(row["snapshot_json"])
+            return CacheStoreEntry(
+                value=RestaurantSearchSnapshot.model_validate_json(row["snapshot_json"]),
+                remaining_ttl_seconds=max(
+                    1, math.ceil((expires_at - now).total_seconds())
+                ),
+            )
 
     def set(
         self,

@@ -289,6 +289,11 @@ class TripDraftService:
 
         queried: dict[tuple[int, str, int], RouteEstimate] = {}
         cache_hits = cache_misses = failed = 0
+        l1_cache_hits = l1_cache_misses = l1_cache_degraded = 0
+        l2_cache_hits = l2_cache_misses = l2_cache_errors = 0
+        provider_calls = 0
+        provider_calls_avoided_by_l1 = 0
+        provider_calls_avoided_by_l2 = 0
         if affected:
             action = self.tool_registry.execute(
                 "estimate_routes",
@@ -307,6 +312,15 @@ class TripDraftService:
             }
             cache_hits = result.cache_hits
             cache_misses = result.cache_misses
+            l1_cache_hits = result.l1_cache_hits
+            l1_cache_misses = result.l1_cache_misses
+            l1_cache_degraded = result.l1_cache_degraded
+            l2_cache_hits = result.l2_cache_hits
+            l2_cache_misses = result.l2_cache_misses
+            l2_cache_errors = result.l2_cache_errors
+            provider_calls = result.provider_calls
+            provider_calls_avoided_by_l1 = result.provider_calls_avoided_by_l1
+            provider_calls_avoided_by_l2 = result.provider_calls_avoided_by_l2
             failed = result.failed_legs
 
         ordered_routes: list[RouteEstimate] = []
@@ -337,6 +351,25 @@ class TripDraftService:
             evaluated_legs=len(ordered_routes),
             cache_hits=cache_hits,
             cache_misses=cache_misses,
+            l1_cache_hits=l1_cache_hits,
+            l1_cache_misses=l1_cache_misses,
+            l1_cache_degraded=l1_cache_degraded,
+            l1_cache_hit_rate=(
+                l1_cache_hits / (l1_cache_hits + l1_cache_misses)
+                if l1_cache_hits + l1_cache_misses
+                else 0.0
+            ),
+            l2_cache_hits=l2_cache_hits,
+            l2_cache_misses=l2_cache_misses,
+            l2_cache_errors=l2_cache_errors,
+            l2_cache_hit_rate=(
+                l2_cache_hits / (l2_cache_hits + l2_cache_misses)
+                if l2_cache_hits + l2_cache_misses
+                else 0.0
+            ),
+            provider_calls=provider_calls,
+            provider_calls_avoided_by_l1=provider_calls_avoided_by_l1,
+            provider_calls_avoided_by_l2=provider_calls_avoided_by_l2,
             failed_legs=failed,
             routes=ordered_routes,
         )

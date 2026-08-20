@@ -85,8 +85,12 @@ class SQLiteRouteCacheTests(unittest.TestCase):
         self.cache.set("route-key", make_estimate(), ttl_seconds=3600)
 
         reopened = SQLiteRouteCache(self.db_path)
-        cached = reopened.get("route-key")
+        entry = reopened.get_entry("route-key")
+        cached = entry.value if entry is not None else None
 
+        self.assertIsNotNone(entry)
+        self.assertGreater(entry.remaining_ttl_seconds, 0)
+        self.assertLessEqual(entry.remaining_ttl_seconds, 3600)
         self.assertIsNotNone(cached)
         self.assertEqual(cached.distance_meters, 1200)
         self.assertFalse(cached.cache_hit)

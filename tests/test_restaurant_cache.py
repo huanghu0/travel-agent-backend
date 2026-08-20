@@ -94,8 +94,12 @@ class SQLiteRestaurantCacheTests(unittest.TestCase):
     def test_value_survives_restart_and_expired_value_is_deleted(self):
         self.cache.set("restaurant-key", make_snapshot(), ttl_seconds=3600)
         reopened = SQLiteRestaurantCache(self.db_path)
+        entry = reopened.get_entry("restaurant-key")
 
-        self.assertEqual(reopened.get("restaurant-key").candidates[0].poi_id, "food-1")
+        self.assertIsNotNone(entry)
+        self.assertGreater(entry.remaining_ttl_seconds, 0)
+        self.assertLessEqual(entry.remaining_ttl_seconds, 3600)
+        self.assertEqual(entry.value.candidates[0].poi_id, "food-1")
 
         with closing(sqlite3.connect(self.db_path)) as connection:
             connection.execute(

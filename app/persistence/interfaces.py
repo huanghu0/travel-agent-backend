@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, TYPE_CHECKING, runtime_checkable
+from dataclasses import dataclass
+from typing import Any, Generic, Protocol, TYPE_CHECKING, TypeVar, runtime_checkable
 
 if TYPE_CHECKING:
     from app.agent_runtime.state import AgentState, AgentStatus
@@ -28,6 +29,17 @@ if TYPE_CHECKING:
         TripPlanningTask,
         TripTaskEvent,
     )
+
+
+TCacheValue = TypeVar("TCacheValue")
+
+
+@dataclass(frozen=True, slots=True)
+class CacheStoreEntry(Generic[TCacheValue]):
+    """L2 持久化缓存条目，并携带剩余 TTL 供 Redis 回填使用。"""
+
+    value: TCacheValue
+    remaining_ttl_seconds: int
 
 
 @runtime_checkable
@@ -81,6 +93,8 @@ class RouteCacheStore(Protocol):
 
     def get(self, cache_key: str) -> RouteEstimate | None: ...
 
+    def get_entry(self, cache_key: str) -> CacheStoreEntry[RouteEstimate] | None: ...
+
     def set(
         self,
         cache_key: str,
@@ -97,6 +111,10 @@ class RestaurantCacheStore(Protocol):
     """餐饮候选快照缓存接口。"""
 
     def get(self, cache_key: str) -> RestaurantSearchSnapshot | None: ...
+
+    def get_entry(
+        self, cache_key: str
+    ) -> CacheStoreEntry[RestaurantSearchSnapshot] | None: ...
 
     def set(
         self,
