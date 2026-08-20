@@ -1,17 +1,18 @@
-# MySQL 基础设施（阶段 2）
+# MySQL 基础设施与五类 Store（阶段 2、3）
 
 ## 1. 本阶段目标
 
-阶段 2 为后续 MySQL Store 和 SQLite 数据迁移建立可重复、可检查的数据库基础设施。本阶段完成：
+阶段 2 建立可重复、可检查的 MySQL 基础设施；阶段 3 在同一 Schema 上实现五类业务 Store。当前完成：
 
 1. 增加 MySQL 连接配置和 SQLAlchemy 连接池；
 2. 定义七张业务表的 SQLAlchemy 元数据；
 3. 使用 Alembic 管理 MySQL Schema；
 4. 提供开发库、测试库初始化脚本；
 5. 提供连接、迁移版本和物理 Schema 校验；
-6. 保持现有 SQLite 运行链路不变。
+6. 实现 AgentState、路线缓存、餐饮缓存、行程版本和异步任务五类 MySQL Store；
+7. 保持 SQLite 运行链路与回滚能力。
 
-> 当前仍必须使用 `DATABASE_BACKEND=sqlite`。MySQL Store 尚未注册，不能把正式运行后端切换成 `mysql`。
+> `DATABASE_BACKEND=sqlite` 与 `DATABASE_BACKEND=mysql` 均已注册。首次切换 MySQL 前必须完成 Alembic 迁移、健康检查和数据迁移；当前尚未执行 SQLite 历史数据迁移。
 
 ## 2. 依赖
 
@@ -171,7 +172,7 @@ python scripts/check_mysql.py --database travel_agent_test
 
 ## 8. 测试
 
-基础设施单元测试默认不连接 MySQL：
+基础设施和普通单元测试默认不连接 MySQL：
 
 ```powershell
 python -m unittest tests.test_mysql_infrastructure -v
@@ -195,20 +196,68 @@ python scripts/check_mysql.py --database travel_agent_test
 
 ## 9. 当前边界与下一阶段
 
-阶段 2 **没有**：
+阶段 3 已开放 MySQL 运行后端，但仍保留以下边界：
 
-- 注册 MySQL Store；
-- 把 API、Worker 或缓存切换到 MySQL；
-- 迁移 `data/agent_memory.db` 中的数据；
-- 删除 SQLite；
-- 接入 Redis。
+- 尚未迁移 `data/agent_memory.db` 中的历史数据；
+- 不删除 SQLite，继续把它作为迁移来源和回滚后端；
+- 尚未接入 Redis；
+- 首次切换前必须确保开发库已执行 `alembic upgrade head` 并通过 `scripts/check_mysql.py`；
+- 完成 SQLite → MySQL 数据迁移前，新 MySQL 库中看不到旧会话属于预期现象。
 
-下一阶段应实现五类 MySQL Store，并重点保证：
+下一阶段实现 SQLite → MySQL 的 `dry-run`、`execute`、`verify` 和可回滚迁移流程；迁移稳定后再接入 Redis 通知和协调能力。
 
-1. 接口行为与现有 SQLite Store 一致；
-2. 事务边界覆盖任务状态和 SSE 事件写入；
-3. Worker 使用 `SELECT ... FOR UPDATE SKIP LOCKED` 抢占任务；
-4. 租约、心跳、取消和幂等操作具备并发测试；
-5. MySQL Store 全量通过后，才允许 `DATABASE_BACKEND=mysql`。
+## 10. 阶段 3：五类 MySQL Store
 
-随后再实现 SQLite → MySQL 的 `dry-run`、`execute`、`verify` 和可回滚迁移流程。
+已实现文件：
+
+```text
+app/persistence/mysql_agent_state_store.py
+app/persistence/mysql_route_cache.py
+app/persistence/mysql_restaurant_cache.py
+app/persistence/mysql_trip_version_store.py
+app/persistence/mysql_trip_task_store.py
+```
+
+统一工厂 `app/persistence/factory.py` 根据 `DATABASE_BACKEND` 返回 SQLite 或 MySQL 实现。MySQL 模式从 `MySQLDatabaseConfig` 创建共享 SQLAlchemy Engine，也支持测试注入 Engine。
+
+核心事务约束：
+
+- AgentState 完整 JSON 与质量查询冗余列使用同一 UPSERT；
+- 路线、餐饮缓存保持 TTL 非正数不写入、读取过期即删除的原语义；
+- 行程版本确认会锁定同一会话版本，在一个事务内撤销旧 confirmed 并确认目标版本；
+- 异步任务创建与 `task_queued` 事件同事务提交；
+- 幂等键和请求指纹使用 MySQL 命名锁串行化，覆盖相同 key 和不同 key 双击；
+- Worker 使用 `SELECT ... FOR UPDATE SKIP LOCKED` 领取任务；
+- 进度、终态和事件同事务提交，并检查 Worker 身份及未过期租约；
+- 取消后的等待任务不会再次被领取，过期租约可以被其他 Worker 恢复。
+
+真实 MySQL Store 契约与并发测试：
+
+```powershell
+$env:RUN_MYSQL_INTEGRATION_TESTS="1"
+python -m unittest tests.test_mysql_stores -v
+Remove-Item Env:RUN_MYSQL_INTEGRATION_TESTS
+```
+
+覆盖五类 Store、缓存过期、版本原子确认、事件原子写入、双 Worker 排他领取、过期租约恢复、取消阻止领取，以及相同/不同幂等键的并发去重。
+
+## 11. 切换运行后端
+
+完成迁移和健康检查后，在本地 `.env` 设置：
+
+```env
+DATABASE_BACKEND=mysql
+```
+
+启动前执行：
+
+```powershell
+alembic upgrade head
+python scripts/check_mysql.py
+```
+
+当前边界：
+
+- SQLite 实现和数据文件仍保留，作为迁移来源与回滚后端；
+- 尚未实现 SQLite → MySQL 的 dry-run、execute、verify 和回滚脚本；
+- 尚未接入 Redis；Redis 后续只承担任务通知、取消/SSE 唤醒、短期缓存和分布式协调，MySQL 继续作为事实来源。

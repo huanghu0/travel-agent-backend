@@ -51,12 +51,12 @@ class Settings:
         _env("CLAUDE_LLM_MAX_TOKENS", "16384") or "16384"
     )
 
-    # 持久化后端选择。阶段一默认仍使用 SQLite，后续 MySQL 实现复用同一 Store 接口。
+    # 持久化后端选择。SQLite 与 MySQL 均实现统一 Store 接口，默认保留 SQLite。
     DATABASE_BACKEND: str = (
         _env("DATABASE_BACKEND", "sqlite") or "sqlite"
     ).lower()
 
-    # MySQL 连接池。阶段二完成基础设施，正式 Store 在下一阶段注册。
+    # MySQL 连接池。DATABASE_BACKEND=mysql 时由 Store 工厂统一创建 Engine。
     MYSQL_HOST: str = _env("MYSQL_HOST", "127.0.0.1") or "127.0.0.1"
     MYSQL_PORT: int = int(_env("MYSQL_PORT", "3306") or "3306")
     MYSQL_DATABASE: str = _env("MYSQL_DATABASE", "travel_agent") or "travel_agent"

@@ -34,6 +34,7 @@ from app.persistence import (
     DraftConflictError,
     DraftNotFoundError,
     SessionNotFoundError,
+    MySQLDatabaseConfig,
     TaskIdempotencyConflictError,
     TripTaskNotFoundError,
     VersionNotFoundError,
@@ -97,6 +98,7 @@ planner_agent = PlannerAgent()
 persistence_stores = create_persistence_stores(
     backend=settings.DATABASE_BACKEND,
     sqlite_database_path=settings.AGENT_MEMORY_DB_PATH,
+    mysql_config=MySQLDatabaseConfig.from_settings(settings),
     route_cache_enabled=settings.AMAP_ROUTE_CACHE_ENABLED,
     restaurant_cache_enabled=settings.AMAP_RESTAURANT_CACHE_ENABLED,
 )

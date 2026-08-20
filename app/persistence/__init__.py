@@ -17,10 +17,6 @@ from app.persistence.exceptions import (
     VersionNotFoundError,
 )
 from app.persistence.factory import PersistenceStores, create_persistence_stores
-from app.persistence.schema_validation import (
-    MySQLSchemaValidation,
-    validate_mysql_schema,
-)
 from app.persistence.interfaces import (
     AgentStateStore,
     RestaurantCacheStore,
@@ -28,6 +24,7 @@ from app.persistence.interfaces import (
     TripTaskStore,
     TripVersionStore,
 )
+from app.persistence.schema_validation import MySQLSchemaValidation, validate_mysql_schema
 
 __all__ = [
     "AgentStateStore",

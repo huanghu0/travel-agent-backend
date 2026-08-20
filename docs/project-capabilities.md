@@ -329,15 +329,15 @@ flowchart TD
 - 接入饮食禁忌、儿童餐、排队和预订等可选数据源。
 - 对远期天气明确返回“尚无可靠预报”，避免把当前天气当作未来天气。
 
-### 持久化演进：Store 抽象与 MySQL 基础设施（阶段一、二已完成）
+### 持久化演进：Store 抽象、MySQL 基础设施与五类 Store（阶段一至三已完成）
 
 阶段一已完成：
 
 - 使用 SQLite Online Backup API 对 `data/agent_memory.db` 创建一致性备份，并生成完整性检查和 SHA-256 manifest。
 - 新增数据库后端无关的 `AgentStateStore`、`TripVersionStore`、`TripTaskStore`、`RouteCacheStore` 和 `RestaurantCacheStore`。
 - Orchestrator、TripDraftService、TripTaskWorker 和任务执行上下文不再直接依赖 SQLite 具体类。
-- 新增统一 Store 工厂，通过 `DATABASE_BACKEND=sqlite` 创建当前持久化实现。
-- 会话、草稿版本、异步任务和缓存异常已统一为数据库后端无关异常，同时保留旧导入路径兼容。
+- 新增统一 Store 工厂，业务层不再自行创建数据库具体实现。
+- 会话、草稿版本、异步任务和缓存异常统一为数据库后端无关异常，同时保留旧导入路径兼容。
 
 阶段二已完成：
 
@@ -346,14 +346,20 @@ flowchart TD
 - 大型 JSON 使用 `LONGTEXT`，时间使用 `DATETIME(6)`，表统一使用 InnoDB、utf8mb4 和 `utf8mb4_unicode_ci`。
 - 提供开发/测试数据库初始化、Alembic 在线迁移、离线 SQL、连接健康检查和物理 Schema 对比工具。
 - 本地开发库与测试库已验证 revision `79714a229219`，七张业务表、索引、唯一约束和事件外键均通过校验。
-- 当前正式 Store 和运行数据仍保留在 SQLite，原同步、异步、SSE、草稿和版本接口保持兼容。
+
+阶段三已完成：
+
+- 实现 AgentState、路线缓存、餐饮缓存、行程版本和异步任务五类 MySQL Store。
+- Store 工厂已支持 `DATABASE_BACKEND=sqlite` 和 `DATABASE_BACKEND=mysql`，SQLite 继续作为回滚后端。
+- Worker 使用 `FOR UPDATE SKIP LOCKED` 排他领取，任务快照与 SSE 事件原子提交。
+- 任务创建支持幂等键、请求指纹和并发双击去重；过期租约恢复、取消阻止领取和旧 Worker 拒绝均已覆盖。
+- 已通过真实 MySQL 五类 Store 契约、缓存 TTL、版本确认和多 Worker 并发测试。
 
 下一步：
 
-- 实现五类 MySQL Store，并补充事务、并发、租约和幂等测试。
-- MySQL Store 完成前继续保持 `DATABASE_BACKEND=sqlite`，不得提前切换。
 - 实现 SQLite → MySQL 的 dry-run、execute、verify 和回滚迁移脚本。
-- MySQL 稳定后再接入 Redis 任务通知、取消、SSE 唤醒和共享缓存。
+- 完成历史数据迁移与切换演练后，再将本地运行后端正式改为 MySQL。
+- MySQL 稳定后接入 Redis 任务通知、取消、SSE 唤醒和共享缓存；MySQL 继续作为事实来源。
 
 ### 阶段六：受约束的自主决策层
 
