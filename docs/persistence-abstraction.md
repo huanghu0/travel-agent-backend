@@ -66,7 +66,7 @@ DATABASE_BACKEND=sqlite
 AGENT_MEMORY_DB_PATH=data/agent_memory.db
 ```
 
-阶段一只注册 SQLite。若错误设置为 `mysql`，应用会在启动阶段明确报错，而不是静默回退到 SQLite。MySQL 将在下一阶段完成 Schema、Store 和 Alembic 后再注册。
+阶段一只注册 SQLite。若错误设置为 `mysql`，应用会在启动阶段明确报错，而不是静默回退到 SQLite。阶段二已完成 MySQL Schema 和 Alembic 基础设施；MySQL Store 仍将在下一阶段实现并注册。
 
 ## 5. 兼容性
 
@@ -83,3 +83,14 @@ app/persistence/exceptions.py
 本阶段没有修改 SQLite 表结构。若需要回滚代码，只需恢复改动；若运行数据库出现意外，可以停止服务后将已验证的备份复制回 `data/agent_memory.db`。
 
 不要在后端或 Worker 正在运行时直接覆盖数据库文件。
+
+
+## 7. 阶段二进展
+
+MySQL 连接池、七张业务表、Alembic 初始迁移、开发/测试库初始化和 Schema 校验已经完成，详见：
+
+```text
+docs/mysql-infrastructure.md
+```
+
+当前运行时仍使用 SQLite。只有五类 MySQL Store 通过接口一致性、事务和并发测试后，才会在 Store 工厂中开放 `DATABASE_BACKEND=mysql`。

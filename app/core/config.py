@@ -56,6 +56,34 @@ class Settings:
         _env("DATABASE_BACKEND", "sqlite") or "sqlite"
     ).lower()
 
+    # MySQL 连接池。阶段二完成基础设施，正式 Store 在下一阶段注册。
+    MYSQL_HOST: str = _env("MYSQL_HOST", "127.0.0.1") or "127.0.0.1"
+    MYSQL_PORT: int = int(_env("MYSQL_PORT", "3306") or "3306")
+    MYSQL_DATABASE: str = _env("MYSQL_DATABASE", "travel_agent") or "travel_agent"
+    MYSQL_TEST_DATABASE: str = (
+        _env("MYSQL_TEST_DATABASE", "travel_agent_test") or "travel_agent_test"
+    )
+    MYSQL_USER: str = _env("MYSQL_USER", "root") or "root"
+    MYSQL_PASSWORD: Optional[str] = _env("MYSQL_PASSWORD")
+    MYSQL_CHARSET: str = _env("MYSQL_CHARSET", "utf8mb4") or "utf8mb4"
+    MYSQL_POOL_SIZE: int = int(_env("MYSQL_POOL_SIZE", "10") or "10")
+    MYSQL_MAX_OVERFLOW: int = int(
+        _env("MYSQL_MAX_OVERFLOW", "20") or "20"
+    )
+    MYSQL_POOL_RECYCLE_SECONDS: int = int(
+        _env("MYSQL_POOL_RECYCLE_SECONDS", "1800") or "1800"
+    )
+    MYSQL_POOL_PRE_PING: bool = _env_bool("MYSQL_POOL_PRE_PING", True)
+    MYSQL_CONNECT_TIMEOUT_SECONDS: int = int(
+        _env("MYSQL_CONNECT_TIMEOUT_SECONDS", "5") or "5"
+    )
+    MYSQL_READ_TIMEOUT_SECONDS: int = int(
+        _env("MYSQL_READ_TIMEOUT_SECONDS", "30") or "30"
+    )
+    MYSQL_WRITE_TIMEOUT_SECONDS: int = int(
+        _env("MYSQL_WRITE_TIMEOUT_SECONDS", "30") or "30"
+    )
+
     # AgentState 持久化检查点与有界确定性执行循环。
     AGENT_MEMORY_DB_PATH: str = _env(
         "AGENT_MEMORY_DB_PATH", "data/agent_memory.db"
