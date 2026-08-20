@@ -329,7 +329,7 @@ flowchart TD
 - 接入饮食禁忌、儿童餐、排队和预订等可选数据源。
 - 对远期天气明确返回“尚无可靠预报”，避免把当前天气当作未来天气。
 
-### 持久化演进：Store 抽象、MySQL 基础设施与五类 Store（阶段一至三已完成）
+### 持久化演进：Store 抽象、MySQL 基础设施、五类 Store 与历史迁移（阶段一至四已完成）
 
 阶段一已完成：
 
@@ -345,7 +345,7 @@ flowchart TD
 - 定义 `agent_sessions`、两张缓存表、草稿/版本表、任务表和 SSE 事件表共七张 MySQL 业务表。
 - 大型 JSON 使用 `LONGTEXT`，时间使用 `DATETIME(6)`，表统一使用 InnoDB、utf8mb4 和 `utf8mb4_unicode_ci`。
 - 提供开发/测试数据库初始化、Alembic 在线迁移、离线 SQL、连接健康检查和物理 Schema 对比工具。
-- 本地开发库与测试库已验证 revision `79714a229219`，七张业务表、索引、唯一约束和事件外键均通过校验。
+- MySQL Schema 由 Alembic 管理，七张业务表、索引、唯一约束和事件外键均纳入自动校验。
 
 阶段三已完成：
 
@@ -355,10 +355,18 @@ flowchart TD
 - 任务创建支持幂等键、请求指纹和并发双击去重；过期租约恢复、取消阻止领取和旧 Worker 拒绝均已覆盖。
 - 已通过真实 MySQL 五类 Store 契约、缓存 TTL、版本确认和多 Worker 并发测试。
 
+阶段四已完成：
+
+- 增加 SQLite → MySQL 的 dry-run、execute、verify、断点恢复和安全 rollback。
+- execute 自动创建不可变 SQLite 快照和 SHA-256 manifest，不直接迁移正在变化的 WAL 数据库。
+- 迁移按主键幂等写入，不覆盖 MySQL 已有冲突记录。
+- 新增迁移批次与逐行凭证表；rollback 只删除本批次插入且此后未被修改的数据。
+- verify 使用完整行摘要，只有 `safe_to_cutover=true` 才允许切换后端。
+- 2026-08-20 本地开发库已迁移并逐行验证 399 条历史记录；测试库完成 399 条 execute → verify → rollback 演练。
+
 下一步：
 
-- 实现 SQLite → MySQL 的 dry-run、execute、verify 和回滚迁移脚本。
-- 完成历史数据迁移与切换演练后，再将本地运行后端正式改为 MySQL。
+- 在停写窗口执行最终增量快照迁移和切换演练，再将本地运行后端改为 MySQL。
 - MySQL 稳定后接入 Redis 任务通知、取消、SSE 唤醒和共享缓存；MySQL 继续作为事实来源。
 
 ### 阶段六：受约束的自主决策层

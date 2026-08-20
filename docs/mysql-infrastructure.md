@@ -1,8 +1,8 @@
-# MySQL 基础设施与五类 Store（阶段 2、3）
+# MySQL 基础设施、五类 Store 与历史迁移（阶段 2～4）
 
 ## 1. 本阶段目标
 
-阶段 2 建立可重复、可检查的 MySQL 基础设施；阶段 3 在同一 Schema 上实现五类业务 Store。当前完成：
+阶段 2 建立可重复、可检查的 MySQL 基础设施；阶段 3 实现五类业务 Store；阶段 4 增加 SQLite 历史迁移链路。当前完成：
 
 1. 增加 MySQL 连接配置和 SQLAlchemy 连接池；
 2. 定义七张业务表的 SQLAlchemy 元数据；
@@ -10,9 +10,10 @@
 4. 提供开发库、测试库初始化脚本；
 5. 提供连接、迁移版本和物理 Schema 校验；
 6. 实现 AgentState、路线缓存、餐饮缓存、行程版本和异步任务五类 MySQL Store；
-7. 保持 SQLite 运行链路与回滚能力。
+7. 保持 SQLite 运行链路与回滚能力；
+8. 提供 SQLite → MySQL 的 dry-run、execute、verify、resume 和安全 rollback。
 
-> `DATABASE_BACKEND=sqlite` 与 `DATABASE_BACKEND=mysql` 均已注册。首次切换 MySQL 前必须完成 Alembic 迁移、健康检查和数据迁移；当前尚未执行 SQLite 历史数据迁移。
+> `DATABASE_BACKEND=sqlite` 与 `DATABASE_BACKEND=mysql` 均已注册。首次切换 MySQL 前必须完成 Alembic、迁移和 verify；只有输出 `safe_to_cutover=true` 后才允许切换。
 
 ## 2. 依赖
 
@@ -107,7 +108,7 @@ alembic upgrade head --sql > build/mysql-schema.sql
 
 `migrations/env.py` 会从 `.env` 读取连接参数，并通过 SQLAlchemy `URL.create()` 安全构造 URL。数据库密码不会写入仓库。
 
-## 6. 七张业务表
+## 6. 七张业务表与两张迁移审计表
 
 | 表 | 用途 |
 |---|---|
@@ -118,6 +119,8 @@ alembic upgrade head --sql > build/mysql-schema.sql
 | `trip_drafts` | 用户编辑中的行程草稿 |
 | `trip_planning_tasks` | 异步规划任务、幂等键、租约和取消状态 |
 | `trip_task_events` | 可回放 SSE 事件 |
+| `data_migration_batches` | SQLite 历史迁移批次、源摘要和报告 |
+| `data_migration_records` | 逐行插入凭证和安全回滚摘要 |
 
 物理约定：
 
@@ -152,7 +155,7 @@ python scripts/check_mysql.py --database travel_agent_test
 - MySQL 可连接；
 - 当前数据库和服务端版本；
 - Alembic revision；
-- 七张业务表是否齐全；
+- 七张业务表与两张迁移审计表是否齐全；
 - 字段、主键、索引、唯一约束和外键是否与 SQLAlchemy 元数据一致；
 - 大对象是否为 `LONGTEXT`；
 - 时间是否为 `DATETIME(6)`；
@@ -164,7 +167,7 @@ python scripts/check_mysql.py --database travel_agent_test
 ```json
 {
   "healthy": true,
-  "alembic_revision": "79714a229219",
+  "alembic_revision": "a31f0c8d4b72",
   "schema_valid": true,
   "schema_errors": []
 }
@@ -196,15 +199,15 @@ python scripts/check_mysql.py --database travel_agent_test
 
 ## 9. 当前边界与下一阶段
 
-阶段 3 已开放 MySQL 运行后端，但仍保留以下边界：
+阶段 4 已完成迁移工具，但正式切换仍保留以下边界：
 
-- 尚未迁移 `data/agent_memory.db` 中的历史数据；
+- 必须在停写窗口对最终 SQLite 快照重新 execute 和 verify；
 - 不删除 SQLite，继续把它作为迁移来源和回滚后端；
 - 尚未接入 Redis；
 - 首次切换前必须确保开发库已执行 `alembic upgrade head` 并通过 `scripts/check_mysql.py`；
-- 完成 SQLite → MySQL 数据迁移前，新 MySQL 库中看不到旧会话属于预期现象。
+- 只有 verify 返回 `safe_to_cutover=true` 后才允许修改 `DATABASE_BACKEND`。
 
-下一阶段实现 SQLite → MySQL 的 `dry-run`、`execute`、`verify` 和可回滚迁移流程；迁移稳定后再接入 Redis 通知和协调能力。
+下一阶段是在停写窗口完成最终迁移与后端切换演练；稳定后再接入 Redis 通知和协调能力。
 
 ## 10. 阶段 3：五类 MySQL Store
 
@@ -259,5 +262,20 @@ python scripts/check_mysql.py
 当前边界：
 
 - SQLite 实现和数据文件仍保留，作为迁移来源与回滚后端；
-- 尚未实现 SQLite → MySQL 的 dry-run、execute、verify 和回滚脚本；
+- SQLite → MySQL 迁移工具已实现，切换前必须保存批次报告并通过逐行 verify；
 - 尚未接入 Redis；Redis 后续只承担任务通知、取消/SSE 唤醒、短期缓存和分布式协调，MySQL 继续作为事实来源。
+
+## 12. SQLite 历史迁移
+
+完整操作手册见 `docs/sqlite-to-mysql-migration.md`。核心命令：
+
+```powershell
+python scripts/migrate_sqlite_to_mysql.py dry-run
+python scripts/migrate_sqlite_to_mysql.py execute
+python scripts/migrate_sqlite_to_mysql.py verify --batch-id <batch-id>
+python scripts/migrate_sqlite_to_mysql.py rollback --batch-id <batch-id>
+```
+
+迁移不会覆盖 MySQL 已有冲突行；rollback 也不会删除迁移后被业务修改的数据。
+
+本地验收结果见 `docs/mysql-migration-acceptance-2026-08-20.md`。

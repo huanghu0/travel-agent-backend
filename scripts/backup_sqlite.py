@@ -3,74 +3,19 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import sqlite3
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
 
+# 支持从项目根目录直接运行，不要求调用方设置 PYTHONPATH。
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-def _sha256(path: Path) -> str:
-    """分块计算备份文件摘要，避免一次性把数据库读入内存。"""
+from app.persistence.sqlite_backup import create_sqlite_backup
 
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _integrity_check(path: Path) -> str:
-    """执行 SQLite 完整性检查，返回标准化检查结果。"""
-
-    with sqlite3.connect(path) as connection:
-        row = connection.execute("PRAGMA integrity_check").fetchone()
-    return str(row[0] if row else "missing integrity result")
-
-
-def create_backup(source: Path, output_dir: Path) -> tuple[Path, Path]:
-    """在线备份 SQLite；即使服务正在读写，也能获得一致性快照。"""
-
-    source = source.expanduser().resolve(strict=True)
-    output_dir = output_dir.expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    source_integrity = _integrity_check(source)
-    if source_integrity.lower() != "ok":
-        raise RuntimeError(f"源数据库完整性检查失败: {source_integrity}")
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    target = output_dir / f"{source.stem}-{timestamp}{source.suffix}"
-    sequence = 1
-    while target.exists():
-        target = output_dir / f"{source.stem}-{timestamp}-{sequence}{source.suffix}"
-        sequence += 1
-
-    # mode=ro 防止备份程序意外修改源数据库；backup() 会正确处理 WAL 快照。
-    source_uri = f"file:{source.as_posix()}?mode=ro"
-    with sqlite3.connect(source_uri, uri=True) as source_connection:
-        with sqlite3.connect(target) as target_connection:
-            source_connection.backup(target_connection)
-
-    target_integrity = _integrity_check(target)
-    if target_integrity.lower() != "ok":
-        raise RuntimeError(f"备份数据库完整性检查失败: {target_integrity}")
-
-    manifest = {
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "source": str(source),
-        "backup": str(target),
-        "source_integrity": source_integrity,
-        "backup_integrity": target_integrity,
-        "size_bytes": target.stat().st_size,
-        "sha256": _sha256(target),
-    }
-    manifest_path = target.with_suffix(f"{target.suffix}.manifest.json")
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return target, manifest_path
+# 保留旧函数名，避免已有自动化或测试导入路径失效。
+create_backup = create_sqlite_backup
 
 
 def main() -> int:
@@ -89,7 +34,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    backup, manifest = create_backup(args.source, args.output_dir)
+    backup, manifest = create_sqlite_backup(args.source, args.output_dir)
     print(
         json.dumps(
             {"backup": str(backup), "manifest": str(manifest), "status": "ok"},

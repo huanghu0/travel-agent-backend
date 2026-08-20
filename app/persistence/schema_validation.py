@@ -31,7 +31,7 @@ def _column_names(items: list[dict]) -> dict[str, tuple[str, ...]]:
 
 
 def validate_mysql_schema(engine: Engine) -> MySQLSchemaValidation:
-    """验证七张业务表、索引、约束和 MySQL 专用存储类型。"""
+    """验证业务表、迁移审计表、索引、约束和 MySQL 专用存储类型。"""
 
     if engine.dialect.name != "mysql":
         return MySQLSchemaValidation(

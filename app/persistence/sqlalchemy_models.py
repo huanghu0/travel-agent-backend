@@ -1,4 +1,4 @@
-"""MySQL 七张业务表的 SQLAlchemy 元数据。
+"""MySQL 业务表与 SQLite 历史迁移审计表的 SQLAlchemy 元数据。
 
 下一阶段 MySQL Store 将继续使用 Pydantic JSON 字符串，因此大型快照采用 LONGTEXT，
 避免普通 TEXT 的 64 KiB 上限，也避免迁移时改变现有 model_validate_json 语义。
@@ -209,4 +209,46 @@ class TripTaskEventRow(Base):
         MYSQL_TABLE_ARGS,
     )
 
+class DataMigrationBatchRow(Base):
+    """一次 SQLite -> MySQL 迁移批次的审计状态。"""
+
+    __tablename__ = "data_migration_batches"
+
+    batch_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_path: Mapped[str] = mapped_column(_long_text(), nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_size_bytes: Mapped[int] = mapped_column(BIGINT(unsigned=True), nullable=False)
+    backup_path: Mapped[str | None] = mapped_column(_long_text())
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    summary_json: Mapped[str] = mapped_column(_long_text(), nullable=False)
+    error_text: Mapped[str | None] = mapped_column(_long_text())
+    started_at: Mapped[datetime] = mapped_column(_datetime_utc(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(_datetime_utc())
+
+    __table_args__ = (
+        Index("idx_data_migration_batches_status_started", "status", "started_at"),
+        MYSQL_TABLE_ARGS,
+    )
+
+
+class DataMigrationRecordRow(Base):
+    """记录迁移批次真正插入的主键和摘要，用于安全回滚。"""
+
+    __tablename__ = "data_migration_records"
+
+    batch_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("data_migration_batches.batch_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    table_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    target_key_json: Mapped[str] = mapped_column(_long_text(), nullable=False)
+    row_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(_datetime_utc(), nullable=False)
+
+    __table_args__ = (
+        Index("idx_data_migration_records_batch_table", "batch_id", "table_name"),
+        MYSQL_TABLE_ARGS,
+    )
 

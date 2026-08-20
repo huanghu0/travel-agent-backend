@@ -2,13 +2,14 @@
 
 ## 1. 已完成阶段
 
-阶段 0 到阶段 3 已完成：
+阶段 0 到阶段 4 已完成：
 
 1. 使用 SQLite Online Backup API 创建一致性备份和 SHA-256 manifest；
 2. 将业务层改为五类数据库后端无关 Store 接口；
 3. 建立 MySQL 七张业务表、Alembic 迁移、健康检查和 Schema 校验；
 4. 实现五类 MySQL Store，并注册到统一工厂；
-5. 保留 SQLite 实现作为默认后端、迁移来源和回滚通道。
+5. 保留 SQLite 实现作为默认后端、迁移来源和回滚通道；
+6. 提供 SQLite → MySQL 的 dry-run、execute、verify、断点恢复和安全回滚。
 
 ## 2. SQLite 备份
 
@@ -83,8 +84,12 @@ python scripts/check_mysql.py
 
 ## 7. 当前边界与回滚
 
-- 当前尚未把 SQLite 历史数据迁移到 MySQL；
-- 在迁移脚本完成前，不应把“切换后看不到旧会话”误判为数据丢失；
+- 迁移工具已完成，但正式切换前仍必须对最终快照执行 execute 和 verify；
+- `safe_to_cutover=true` 之前，不应切换为 MySQL 后端；
 - Redis 尚未接入，后续只做加速和协调，MySQL 仍是事实来源；
 - 回滚时将 `DATABASE_BACKEND` 改回 `sqlite`，不要删除 SQLite 文件；
 - 不要在后端或 Worker 运行时直接覆盖 SQLite 数据库文件。
+
+## 8. SQLite → MySQL 历史迁移
+
+迁移工具位于 `scripts/migrate_sqlite_to_mysql.py`，支持 dry-run、execute、verify、断点恢复和逐批次安全回滚。迁移审计与业务 Store 分离，业务运行仍只依赖五类 Store 接口。完整说明见 `docs/sqlite-to-mysql-migration.md`。

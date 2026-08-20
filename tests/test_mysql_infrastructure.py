@@ -25,6 +25,8 @@ EXPECTED_TABLES = {
     "trip_drafts",
     "trip_planning_tasks",
     "trip_task_events",
+    "data_migration_batches",
+    "data_migration_records",
 }
 
 
@@ -140,7 +142,7 @@ class MySQLDatabaseConfigTests(unittest.TestCase):
 
 
 class MySQLMetadataTests(unittest.TestCase):
-    def test_metadata_contains_exactly_seven_business_tables(self):
+    def test_metadata_contains_business_and_migration_audit_tables(self):
         self.assertEqual(set(Base.metadata.tables), EXPECTED_TABLES)
 
     def test_mysql_ddl_uses_longtext_datetime6_innodb_and_utf8mb4(self):
