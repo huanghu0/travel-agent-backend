@@ -25,6 +25,7 @@ from app.evaluation import (
     FIXED_ACCEPTANCE_SCENARIOS,
     FixedAcceptanceBaselineReport,
 )
+from app.infrastructure.cache import CacheConfig, create_cache_store
 from app.infrastructure.redis import RedisClientManager, RedisConfig
 from app.memory import (
     AgentSessionSummary,
@@ -64,6 +65,12 @@ from app.tools.unsplash_tools import get_place_photo
 
 # Redis 是可选加速层：初始化连接池管理器不会立即建立网络连接。
 redis_client_manager = RedisClientManager(RedisConfig.from_settings(settings))
+# 通用缓存始终暴露同一接口：启用 Redis 时使用 L1 缓存，否则使用 NoOp 自动绕过。
+# 创建 Store 不会访问网络，Redis 故障也只会产生降级结果，不影响 MySQL 事实数据。
+cache_store = create_cache_store(
+    cache_config=CacheConfig.from_settings(settings),
+    redis_client_manager=redis_client_manager,
+)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -777,11 +784,20 @@ def resume_trip_session(session_id: str):
 def health_check():
     # Redis 是非关键组件：不可用时报告 degraded，但主服务继续通过健康检查。
     redis_health = redis_client_manager.check_health()
+    cache_metrics = cache_store.metrics_snapshot()
     return {
         "status": "ok",
         "message": "旅行助手服务运行正常",
         "degraded": redis_health.degraded,
-        "components": {"redis": redis_health.model_dump()},
+        "components": {
+            "redis": redis_health.model_dump(),
+            "cache": {
+                "backend": cache_store.backend_name,
+                "enabled": cache_store.enabled,
+                "schema_version": cache_store.schema_version,
+                "metrics": cache_metrics.model_dump(),
+            },
+        },
     }
 
 

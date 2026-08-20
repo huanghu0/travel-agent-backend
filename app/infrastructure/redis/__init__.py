@@ -6,6 +6,7 @@ from app.infrastructure.redis.client import (
     RedisHealthStatus,
     create_redis_client,
 )
+from app.infrastructure.redis.cache_store import RedisCacheStore
 from app.infrastructure.redis.config import RedisConfig
 from app.infrastructure.redis.keys import RedisKeyBuilder
 
@@ -15,5 +16,6 @@ __all__ = [
     "RedisHealth",
     "RedisHealthStatus",
     "RedisKeyBuilder",
+    "RedisCacheStore",
     "create_redis_client",
 ]

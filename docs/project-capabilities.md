@@ -194,7 +194,7 @@ flowchart TD
 ### 4.15 测试覆盖
 
 - 测试覆盖高德 POI v5 传输、地点与餐饮标准化、真实餐厅闭环、工具注册、执行策略、会话记忆、路线缓存、路线优化、通勤替换、时间轴优化、约束修复、内容回填、规划模型解析、执行循环收敛、状态跳转压缩、执行基线聚合、固定录制回放、防篡改校验、可恢复故障和不可恢复安全终止。
-- 截至 2026-08-13，本地完整单元测试为 253/253 通过。
+- 截至 2026-08-20，本地完整单元测试为 343/343 通过，另有 9 项环境相关测试跳过。
 - Orchestrator 故障恢复与安全终止基线为 14/14 通过，其中可恢复 7/7、安全终止 7/7。
 - Live Provider 基线已覆盖 15/15 个固定场景且全部可离线回放；当前达到业务质量阈值的场景为 5/15。
 
@@ -372,19 +372,22 @@ flowchart TD
 - API/Worker 已通过历史会话、execution-view、任务查询、202 创建、幂等、取消、SSE 回放和重启验收。
 - MySQL 专用 Schema、Store、租约恢复和多 Worker 并发测试通过；SQLite 继续保留为回滚后端。
 
-Redis 阶段一已完成：
+Redis 阶段一与阶段二已完成：
 
 - 新增 Redis 可选配置、线程安全连接池、连接/命令超时和应用关闭清理。
-- `/api/health` 已展示 Redis 的 `ok`、`disabled` 或 `degraded` 组件状态。
 - Redis 连接失败时进入短暂冷却并返回调用方 fallback，不中断 MySQL/SQLite 主链路。
 - 建立统一 Key 前缀、可信标识符校验和复杂查询 SHA-256 摘要规则，避免在 Key 中暴露地址与偏好原文。
-- 增加独立 Redis 健康检查脚本、密码擦除、故障恢复和本机 6379 Live 验收。
+- 实现数据库后端无关的 `CacheStore` 协议，以及 `RedisCacheStore`、`NoOpCacheStore` 和配置工厂。
+- 缓存统一使用带 `schema_version`、UTC 创建时间、绝对过期时间和 payload 的 UTF-8 JSON 信封，禁止 pickle、NaN 和任意对象反序列化。
+- 建立默认、最小、最大 TTL 规则；非正 TTL 跳过写入，超界 TTL 自动封底或封顶。
+- Redis 故障返回显式 `degraded`，缓存关闭返回 `bypass/skipped`，不会把缓存异常升级为旅行规划失败。
+- 增加命中、未命中、绕过、降级、损坏、过期、写入和删除指标；`/api/health` 已展示缓存 backend、版本和指标快照。
+- Redis 检查脚本支持唯一 Key 的版本化 JSON set/get/TTL/delete 冒烟测试，并已通过本机 6379 Live 验收。
 - 当前尚未把路线、餐饮、异步任务和 SSE 业务数据写入 Redis；MySQL 仍是唯一事实来源。
 
 下一步：
 
-- 实现 `CacheStore`、`RedisCacheStore` 和 `NoOpCacheStore`，建立缓存 schema version、TTL 与序列化规范。
-- 在通用缓存层稳定后，按 Redis L1 → MySQL L2 → 高德 Provider 顺序接入路线和餐饮缓存。
+- 按 Redis L1 → MySQL L2 → 高德 Provider 顺序接入路线和餐饮缓存，并统计分层命中率与节省的 Provider 调用量。
 - 再接入任务通知、取消/SSE 唤醒、共享限流和分布式协调。
 - 将内置 Worker 拆为独立进程，再进行多实例 API + 多 Worker 的容量和故障切换验收。
 

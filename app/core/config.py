@@ -121,6 +121,20 @@ class Settings:
     REDIS_DEFAULT_TTL_SECONDS: int = int(
         _env("REDIS_DEFAULT_TTL_SECONDS", "1800") or "1800"
     )
+    # 通用缓存信封与 TTL 边界。修改 schema version 会让旧缓存自动失效，
+    # 但不会影响 MySQL 中的持久化业务数据。
+    REDIS_CACHE_SCHEMA_VERSION: int = int(
+        _env("REDIS_CACHE_SCHEMA_VERSION", "1") or "1"
+    )
+    REDIS_CACHE_MIN_TTL_SECONDS: int = int(
+        _env("REDIS_CACHE_MIN_TTL_SECONDS", "1") or "1"
+    )
+    REDIS_CACHE_MAX_TTL_SECONDS: int = int(
+        _env("REDIS_CACHE_MAX_TTL_SECONDS", "604800") or "604800"
+    )
+    REDIS_CACHE_DELETE_INVALID_ENTRIES: bool = _env_bool(
+        "REDIS_CACHE_DELETE_INVALID_ENTRIES", True
+    )
     REDIS_DEGRADE_COOLDOWN_SECONDS: float = float(
         _env("REDIS_DEGRADE_COOLDOWN_SECONDS", "5") or "5"
     )
