@@ -329,6 +329,24 @@ flowchart TD
 - 接入饮食禁忌、儿童餐、排队和预订等可选数据源。
 - 对远期天气明确返回“尚无可靠预报”，避免把当前天气当作未来天气。
 
+### 持久化演进：统一 Store 抽象（阶段一已完成）
+
+已完成：
+
+- 使用 SQLite Online Backup API 对 `data/agent_memory.db` 创建一致性备份，并生成完整性检查和 SHA-256 manifest。
+- 新增数据库后端无关的 `AgentStateStore`、`TripVersionStore`、`TripTaskStore`、`RouteCacheStore` 和 `RestaurantCacheStore`。
+- Orchestrator、TripDraftService、TripTaskWorker 和任务执行上下文不再直接依赖 SQLite 具体类。
+- 新增统一 Store 工厂，通过 `DATABASE_BACKEND=sqlite` 创建当前持久化实现。
+- 会话、草稿版本、异步任务和缓存异常已统一为数据库后端无关异常，同时保留旧导入路径兼容。
+- 当前 SQLite 表结构和运行数据没有发生迁移，原同步、异步、SSE、草稿和版本接口保持兼容。
+
+下一步：
+
+- 接入 SQLAlchemy、PyMySQL 和 Alembic。
+- 创建 MySQL Schema 和五类 MySQL Store。
+- 实现 SQLite → MySQL 的 dry-run、execute 和 verify 迁移脚本。
+- MySQL 稳定后再接入 Redis 任务通知、取消、SSE 唤醒和共享缓存。
+
 ### 阶段六：受约束的自主决策层
 
 在确定性工具层和评测体系稳定后，再增加 LLM Planner/Coordinator：

@@ -1,4 +1,4 @@
-﻿"""使用 SQLite 持久化标准化高德路线结果的缓存。"""
+"""使用 SQLite 持久化标准化高德路线结果的缓存。"""
 
 from __future__ import annotations
 
@@ -7,10 +7,11 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from app.persistence.interfaces import RouteCacheStore
 from app.providers.amap.models import RouteEstimate
 
 
-class SQLiteRouteCache:
+class SQLiteRouteCache(RouteCacheStore):
     """按路线分段独立持久化，不与完整 AgentState 检查点耦合。"""
 
     def __init__(self, database_path: str | Path):

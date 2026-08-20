@@ -6,12 +6,9 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.agent_runtime.state import AgentState
-from app.memory.sqlite_store import SQLiteAgentStateStore
 from app.constraints import constraint_plan_fingerprint
-from app.memory.sqlite_trip_version_store import (
-    DraftConflictError,
-    SQLiteTripVersionStore,
-)
+from app.persistence.exceptions import DraftConflictError
+from app.persistence.interfaces import AgentStateStore, TripVersionStore
 from app.plan_content.rebuilder import plan_content_source_fingerprint
 from app.providers.amap.models import RouteEstimate, RouteEstimateResult, RouteLegRequest
 from app.routing import build_route_legs, evaluate_route_quality, plan_route_fingerprint
@@ -64,8 +61,8 @@ class TripDraftService:
     def __init__(
         self,
         *,
-        state_store: SQLiteAgentStateStore,
-        version_store: SQLiteTripVersionStore,
+        state_store: AgentStateStore,
+        version_store: TripVersionStore,
         tool_registry: ToolRegistry,
         orchestrator,
     ) -> None:

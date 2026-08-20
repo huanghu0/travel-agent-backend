@@ -4,25 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Protocol
-
+from app.persistence.interfaces import RestaurantCacheStore
 from app.providers.amap.models import GeoPoint, RestaurantSearchSnapshot
 
-
-class RestaurantCache(Protocol):
-    """注入高德 Provider 的最小餐饮缓存接口。"""
-
-    def get(self, cache_key: str) -> RestaurantSearchSnapshot | None:
-        """返回未过期餐饮快照；缓存未命中时返回 None。"""
-
-    def set(
-        self,
-        cache_key: str,
-        snapshot: RestaurantSearchSnapshot,
-        *,
-        ttl_seconds: int,
-    ) -> None:
-        """按指定 TTL 持久化一份与具体行程锚点无关的餐饮快照。"""
+# 兼容原有 Provider 导入名；实际契约统一定义在 persistence.interfaces。
+RestaurantCache = RestaurantCacheStore
 
 
 def restaurant_search_cache_key(

@@ -1,28 +1,14 @@
-﻿"""标准化高德路线结果的缓存键契约。"""
+"""标准化高德路线结果的缓存键契约。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Protocol
-
+from app.persistence.interfaces import RouteCacheStore
 from app.providers.amap.models import RouteEstimate, RouteLegRequest
 
-
-class RouteCache(Protocol):
-    """注入高德 Provider 的最小路线缓存接口。"""
-
-    def get(self, cache_key: str) -> RouteEstimate | None:
-        """返回未过期路线结果；缓存未命中时返回 None。"""
-
-    def set(
-        self,
-        cache_key: str,
-        estimate: RouteEstimate,
-        *,
-        ttl_seconds: int,
-    ) -> None:
-        """按指定 TTL 持久化一条路线结果。"""
+# 兼容原有 Provider 导入名；实际契约统一定义在 persistence.interfaces。
+RouteCache = RouteCacheStore
 
 
 def route_leg_cache_key(leg: RouteLegRequest) -> str:

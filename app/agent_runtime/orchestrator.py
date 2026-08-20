@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Protocol
+from typing import Any
 
 from app.agent_runtime.acceptance import (
     DEFAULT_ALLOWED_PARTIAL_ERROR_CODES,
@@ -51,6 +51,7 @@ from app.constraints import (
     DeterministicConstraintOptimizer,
     constraint_plan_fingerprint,
 )
+from app.persistence.interfaces import AgentStateStore
 from app.plan_content import (
     MinimumAttractionRefillOptimizer,
     TripPlanConsistencyRebuilder,
@@ -89,12 +90,6 @@ from app.tools.models import ActionResult, ToolErrorType
 from app.tools.registry import ToolRegistry
 from app.tools.trip_registry import build_trip_tool_registry
 from app.validation import TripPlanValidator, remove_duplicate_attractions
-
-
-class AgentStateStore(Protocol):
-    """编排器保存和恢复状态所需的最小检查点接口。"""
-
-    def save_state(self, state: AgentState) -> None: ...
 
 
 _ACTION_REASONS = {

@@ -51,6 +51,11 @@ class Settings:
         _env("CLAUDE_LLM_MAX_TOKENS", "16384") or "16384"
     )
 
+    # 持久化后端选择。阶段一默认仍使用 SQLite，后续 MySQL 实现复用同一 Store 接口。
+    DATABASE_BACKEND: str = (
+        _env("DATABASE_BACKEND", "sqlite") or "sqlite"
+    ).lower()
+
     # AgentState 持久化检查点与有界确定性执行循环。
     AGENT_MEMORY_DB_PATH: str = _env(
         "AGENT_MEMORY_DB_PATH", "data/agent_memory.db"

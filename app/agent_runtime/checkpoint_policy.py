@@ -5,15 +5,10 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from time import sleep
-from typing import Callable, Protocol
+from typing import Callable
 
 from app.agent_runtime.state import AgentState
-
-
-class CheckpointStore(Protocol):
-    """Minimal persistence interface required by the checkpoint policy."""
-
-    def save_state(self, state: AgentState) -> None: ...
+from app.persistence.interfaces import AgentStateStore
 
 
 @dataclass(frozen=True)
@@ -51,7 +46,7 @@ class CheckpointPolicy:
         self.sleep_fn = sleep_fn
         self.retry_events: list[CheckpointRetryEvent] = []
 
-    def save(self, store: CheckpointStore, state: AgentState) -> None:
+    def save(self, store: AgentStateStore, state: AgentState) -> None:
         """Persist state, retrying only SQLite lock contention."""
 
         for attempt in range(1, self.max_attempts + 1):

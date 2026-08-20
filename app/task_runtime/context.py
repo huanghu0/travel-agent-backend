@@ -12,7 +12,7 @@ from app.task_runtime.progress import action_progress, stage_name
 
 if TYPE_CHECKING:
     from app.agent_runtime.state import AgentState
-    from app.task_runtime.store import SQLiteTripTaskStore
+    from app.persistence.interfaces import TripTaskStore
 
 
 class TaskCancellationRequested(RuntimeError):
@@ -23,7 +23,7 @@ class TaskCancellationRequested(RuntimeError):
 class TaskExecutionContext:
     task_id: str
     worker_id: str
-    store: "SQLiteTripTaskStore"
+    store: "TripTaskStore"
     # 记录当前物理根动作开始前的历史长度，避免最后一个压缩子动作覆盖根动作结果。
     action_history_start: int = 0
 

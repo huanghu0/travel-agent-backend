@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
+from app.persistence.exceptions import (
+    TaskIdempotencyConflictError,
+    TaskLeaseLostError,
+    TripTaskNotFoundError,
+)
+from app.persistence.interfaces import TripTaskStore
 from app.schemas.trip_schema import TripRequest
 from app.task_runtime.models import (
     TaskEventType,
@@ -21,19 +27,7 @@ from app.task_runtime.models import (
 )
 
 
-class TripTaskNotFoundError(LookupError):
-    """任务不存在。"""
-
-
-class TaskIdempotencyConflictError(RuntimeError):
-    """相同幂等键被用于不同请求。"""
-
-
-class TaskLeaseLostError(RuntimeError):
-    """Worker 已不再拥有任务租约，必须停止写入终态。"""
-
-
-class SQLiteTripTaskStore:
+class SQLiteTripTaskStore(TripTaskStore):
     """通过 SQLite WAL 提供持久化队列、幂等创建和原子任务领取。"""
 
     ACTIVE_STATUSES = ("queued", "running", "retrying")

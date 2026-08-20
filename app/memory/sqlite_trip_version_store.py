@@ -7,22 +7,16 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.persistence.exceptions import (
+    DraftConflictError,
+    DraftNotFoundError,
+    VersionNotFoundError,
+)
+from app.persistence.interfaces import TripVersionStore
 from app.schemas.trip_draft_schema import TripDraft, TripPlanVersion
 
 
-class DraftNotFoundError(LookupError):
-    pass
-
-
-class VersionNotFoundError(LookupError):
-    pass
-
-
-class DraftConflictError(RuntimeError):
-    pass
-
-
-class SQLiteTripVersionStore:
+class SQLiteTripVersionStore(TripVersionStore):
     """独立保存草稿和版本，避免编辑过程覆盖 AgentState 原检查点。"""
 
     def __init__(self, database_path: str | Path):

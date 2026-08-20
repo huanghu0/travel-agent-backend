@@ -25,13 +25,11 @@ from app.memory.models import (
     ExecutionBaselineReport,
     QualityBaselineReport,
 )
+from app.persistence.exceptions import SessionNotFoundError
+from app.persistence.interfaces import AgentStateStore
 
 
-class SessionNotFoundError(LookupError):
-    """找不到指定持久化会话时抛出。"""
-
-
-class SQLiteAgentStateStore:
+class SQLiteAgentStateStore(AgentStateStore):
     """使用 SQLite UPSERT 保存完整 AgentState 检查点。"""
 
     def __init__(self, database_path: str | Path):

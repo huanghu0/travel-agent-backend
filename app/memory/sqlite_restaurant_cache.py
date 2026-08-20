@@ -7,10 +7,11 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from app.persistence.interfaces import RestaurantCacheStore
 from app.providers.amap.models import RestaurantSearchSnapshot
 
 
-class SQLiteRestaurantCache:
+class SQLiteRestaurantCache(RestaurantCacheStore):
     """缓存稳定 POI 快照，不保存 day_index、meal_type 等具体行程字段。"""
 
     def __init__(self, database_path: str | Path):

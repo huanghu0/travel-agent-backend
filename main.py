@@ -29,14 +29,15 @@ from app.memory import (
     AgentSessionSummary,
     ExecutionBaselineReport,
     QualityBaselineReport,
-    SessionNotFoundError,
-    SQLiteAgentStateStore,
-    SQLiteRestaurantCache,
-    SQLiteRouteCache,
-    SQLiteTripVersionStore,
+)
+from app.persistence import (
     DraftConflictError,
     DraftNotFoundError,
+    SessionNotFoundError,
+    TaskIdempotencyConflictError,
+    TripTaskNotFoundError,
     VersionNotFoundError,
+    create_persistence_stores,
 )
 from app.schemas.execution_view_schema import TripExecutionView
 from app.schemas.trip_schema import TripPlanResponse, TripRequest
@@ -50,12 +51,9 @@ from app.schemas.trip_draft_schema import (
 )
 from app.services import TripDraftService
 from app.task_runtime import (
-    SQLiteTripTaskStore,
-    TaskIdempotencyConflictError,
     TripPlanningTask,
     TripTaskCancelResponse,
     TripTaskCreateResponse,
-    TripTaskNotFoundError,
 )
 from app.task_runtime.worker import TripTaskWorker, WorkerSettings
 from app.tools import ToolDescriptor, build_trip_tool_registry
@@ -92,24 +90,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 初始化规划智能体、SQLite 会话记忆和确定性编排器（单例）
+# 初始化规划智能体、持久化 Store 和确定性编排器（单例）。
 # 步骤 1：PlannerAgent 只负责“生成行程”和“修复行程”，这两个步骤才会调用 LLM。
 planner_agent = PlannerAgent()
-# 步骤 2：SQLite 保存每次执行的 AgentState，支持查询、复盘和断点恢复。
-agent_state_store = SQLiteAgentStateStore(settings.AGENT_MEMORY_DB_PATH)
-# 编辑草稿与正式版本独立持久化，避免未确认修改覆盖原始智能体检查点。
-trip_version_store = SQLiteTripVersionStore(settings.AGENT_MEMORY_DB_PATH)
-route_cache = (
-    SQLiteRouteCache(settings.AGENT_MEMORY_DB_PATH)
-    if settings.AMAP_ROUTE_CACHE_ENABLED
-    else None
+# 步骤 2：统一工厂根据 DATABASE_BACKEND 创建 Store；业务层不再直接依赖 SQLite。
+persistence_stores = create_persistence_stores(
+    backend=settings.DATABASE_BACKEND,
+    sqlite_database_path=settings.AGENT_MEMORY_DB_PATH,
+    route_cache_enabled=settings.AMAP_ROUTE_CACHE_ENABLED,
+    restaurant_cache_enabled=settings.AMAP_RESTAURANT_CACHE_ENABLED,
 )
-# 餐饮缓存与会话记忆共用数据库文件，但使用独立表和较短 TTL。
-restaurant_cache = (
-    SQLiteRestaurantCache(settings.AGENT_MEMORY_DB_PATH)
-    if settings.AMAP_RESTAURANT_CACHE_ENABLED
-    else None
-)
+agent_state_store = persistence_stores.agent_state_store
+trip_version_store = persistence_stores.trip_version_store
+route_cache = persistence_stores.route_cache
+restaurant_cache = persistence_stores.restaurant_cache
 # 步骤 3：注册工具白名单。景点、天气、酒店直接调用高德，不经过 LLM。
 trip_tool_registry = build_trip_tool_registry(
     planner_agent=planner_agent,
@@ -243,8 +237,8 @@ trip_draft_service = TripDraftService(
 )
 
 
-# 阶段五：任务元数据与 SSE 事件同样写入 SQLite，独立于 AgentState 检查点。
-trip_task_store = SQLiteTripTaskStore(settings.AGENT_MEMORY_DB_PATH)
+# 阶段五：任务元数据与 SSE 事件使用同一持久化后端，独立于 AgentState 检查点。
+trip_task_store = persistence_stores.trip_task_store
 trip_task_worker = TripTaskWorker(
     task_store=trip_task_store,
     state_store=agent_state_store,

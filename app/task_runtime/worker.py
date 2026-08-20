@@ -1,4 +1,4 @@
-"""基于 SQLite 持久化队列的后台 Worker。"""
+"""基于持久化任务队列的后台 Worker。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from app.agent_runtime import (
     AgentState,
     TripOrchestrator,
 )
-from app.memory.sqlite_store import SessionNotFoundError, SQLiteAgentStateStore
+from app.persistence.exceptions import SessionNotFoundError, TaskLeaseLostError
+from app.persistence.interfaces import AgentStateStore, TripTaskStore
 from app.task_runtime.context import (
     TaskCancellationRequested,
     TaskExecutionContext,
@@ -25,7 +26,7 @@ from app.task_runtime.context import (
 )
 from app.task_runtime.models import TaskFailureReport, TripPlanningTask
 from app.task_runtime.progress import stage_name
-from app.task_runtime.store import SQLiteTripTaskStore, TaskLeaseLostError
+
 
 
 logger = logging.getLogger(__name__)
@@ -40,13 +41,13 @@ class WorkerSettings:
 
 
 class TripTaskWorker:
-    """单进程后台 Worker；多进程部署时由 SQLite 租约保证互斥领取。"""
+    """后台 Worker；由具体 Store 的租约实现保证互斥领取。"""
 
     def __init__(
         self,
         *,
-        task_store: SQLiteTripTaskStore,
-        state_store: SQLiteAgentStateStore,
+        task_store: TripTaskStore,
+        state_store: AgentStateStore,
         orchestrator: TripOrchestrator,
         settings: WorkerSettings | None = None,
         worker_id: str | None = None,
@@ -81,7 +82,7 @@ class TripTaskWorker:
             self._thread.start()
 
     def stop(self) -> None:
-        """停止领取新任务；当前状态已由 Orchestrator 持续写入 SQLite 检查点。"""
+        """停止领取新任务；当前状态已由 Orchestrator 持续写入持久化检查点。"""
 
         with self._lock:
             thread = self._thread
