@@ -207,6 +207,8 @@ Redis 不可用时顶层服务仍返回 `status=ok`，并使用 `degraded=true` 
 .\.venv\Scripts\python.exe -m unittest tests.test_layered_amap_cache -v
 .\.venv\Scripts\python.exe -m unittest tests.test_task_notifications -v
 .\.venv\Scripts\python.exe -m unittest tests.test_redis_runtime_acceptance -v
+.\.venv\Scripts\python.exe -m unittest tests.test_redis_business_enhancements -v
+.\.venv\Scripts\python.exe scripts\run_redis_business_acceptance.py
 .\.venv\Scripts\python.exe scripts\check_redis.py --require-enabled --cache-smoke-test
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
@@ -311,8 +313,27 @@ Redis 第二阶段生产化能力已经完成：
 docs/redis-production-observability.md
 ```
 
-## 15. 后续阶段
+## 15. 第三阶段业务增强
 
-- 增加 Redis 跨实例共享限流和高德/LLM 调用配额；
+已完成：
+
+- Redis Lua 跨实例固定窗口限流；
+- 高德全局每秒/分钟/每日配额；
+- LLM 按模型摘要的每分钟/每日请求配额；
+- 天气、景点、周边景点、酒店、地理编码、通用 POI 和 POI 详情标准化结果缓存；
+- execution-view 与异步任务最新进度快照缓存；
+- Provider 配额与业务缓存 Prometheus 指标；
+- 跨进程配额、并发连接池和 Redis 中断/恢复验收脚本。
+
+详细设计、配置、缓存矩阵和边界见：
+
+```text
+docs/redis-business-enhancements.md
+```
+
+## 16. 后续阶段
+
+- 在建立用户认证后增加用户级、租户级配额；
+- 增加 LLM token 配额和成本预算，而不只统计请求次数；
 - 接入实际 Prometheus、Alertmanager 和 OpenTelemetry Collector 环境；
-- 根据生产多实例指标持续校准连接池、通知间隔和告警阈值。
+- 根据生产多实例指标持续校准连接池、配额、通知间隔和告警阈值。

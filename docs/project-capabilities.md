@@ -372,7 +372,7 @@ flowchart TD
 - API/Worker 已通过历史会话、execution-view、任务查询、202 创建、幂等、取消、SSE 回放和重启验收。
 - MySQL 专用 Schema、Store、租约恢复和多 Worker 并发测试通过；SQLite 继续保留为回滚后端。
 
-Redis 阶段一至生产化第二阶段已完成：
+Redis 阶段一至第三阶段业务增强已完成：
 
 - 新增 Redis 可选配置、线程安全连接池、连接/命令超时和应用关闭清理。
 - Redis 连接失败时进入短暂冷却并返回调用方 fallback，不中断 MySQL/SQLite 主链路。
@@ -385,12 +385,17 @@ Redis 阶段一至生产化第二阶段已完成：
 - `/metrics` 和 `/api/observability/redis` 已提供 Prometheus、可选 OpenTelemetry、连接池、降级、通知和结构化告警。
 - 提供 Prometheus 抓取与告警规则、OpenTelemetry Collector 示例和无高德/LLM 的 Redis 并发压力脚本。
 - 本机 20 并发压力基线将连接池从 20 调整为 32；3000 条命令零错误，Pub/Sub 接收率 100%，Worker/SSE 兜底间隔保持 5 秒。
+- Redis Lua 已提供跨 API/Worker 实例的原子固定窗口限流，高德使用全局每秒/分钟/每日额度，LLM 使用按模型摘要隔离的每分钟/每日请求额度。
+- 天气、景点、周边景点、酒店、地理编码、通用 POI 和 POI 详情已接入标准化 Redis 热缓存；缓存损坏或 Redis 故障时透明回源高德。
+- execution-view 与异步任务最新进度已接入 Redis 只读快照；AgentState、任务、取消、租约和 SSE 事件仍由数据库保存真相。
+- 新增 Provider 配额和高德业务缓存 Prometheus 指标，以及不调用真实高德/LLM 的跨进程额度与故障恢复验收。
 
 下一步：
 
-- 实施 Redis 跨实例共享限流，以及高德/LLM 的用户级、模型级和供应商级调用配额。
-- 在真实多实例部署中接入 Prometheus/Alertmanager/OTel Collector，并按长期指标继续校准容量。
+- 在用户认证体系完成后增加用户级/租户级配额，并补充 LLM token 与成本预算；当前已完成供应商级和模型级请求次数配额。
+- 在真实多实例部署中接入 Prometheus/Alertmanager/OTel Collector，并按长期指标继续校准容量与配额。
 - 将内置 Worker 拆为独立部署单元，完成多实例 API + 多 Worker 的容量和故障切换验收。
+- 进入用户长期记忆与受约束 LLM 自主决策前，先完成身份归属、隐私保留、记忆摘要和可撤销策略。
 
 ### 阶段六：受约束的自主决策层
 

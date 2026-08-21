@@ -27,9 +27,11 @@ class NotifyingTripTaskStore:
         *,
         delegate: TripTaskStore,
         notification_bus: TaskNotificationBus,
+        snapshot_cache: Any | None = None,
     ) -> None:
         self.delegate = delegate
         self.notification_bus = notification_bus
+        self.snapshot_cache = snapshot_cache
 
     def request_fingerprint(self, request: TripRequest) -> str:
         return self.delegate.request_fingerprint(request)
@@ -44,6 +46,7 @@ class NotifyingTripTaskStore:
             request,
             idempotency_key=idempotency_key,
         )
+        self._cache_task(task)
         if not reused:
             self._safe_notify(
                 self.notification_bus.publish_task_available,
@@ -52,7 +55,14 @@ class NotifyingTripTaskStore:
         return task, reused
 
     def get_task(self, task_id: str) -> TripPlanningTask:
-        return self.delegate.get_task(task_id)
+        # 前端轮询优先读取 Redis 快照；未命中/损坏/降级时回到数据库事实源。
+        if self.snapshot_cache is not None:
+            cached = self.snapshot_cache.get_task_progress(task_id, TripPlanningTask)
+            if cached is not None:
+                return cached
+        task = self.delegate.get_task(task_id)
+        self._cache_task(task)
+        return task
 
     def list_events(
         self,
@@ -103,6 +113,7 @@ class NotifyingTripTaskStore:
             data=data,
         )
         self._notify_event(task_id, event_type)
+        self._cache_task(task)
         return task
 
     def claim_next(
@@ -113,6 +124,7 @@ class NotifyingTripTaskStore:
     ) -> TripPlanningTask | None:
         task = self.delegate.claim_next(worker_id, lease_seconds=lease_seconds)
         if task is not None:
+            self._cache_task(task)
             event_type = "task_recovered" if task.recovery_count else "task_started"
             self._notify_event(task.task_id, event_type)
         return task
@@ -135,6 +147,7 @@ class NotifyingTripTaskStore:
 
     def request_cancel(self, task_id: str) -> TripPlanningTask:
         task = self.delegate.request_cancel(task_id)
+        self._cache_task(task)
         if task.cancel_requested:
             event_type = "task_cancelled" if task.terminal else "cancellation_requested"
             self._safe_notify(self.notification_bus.publish_cancellation, task_id)
@@ -154,6 +167,7 @@ class NotifyingTripTaskStore:
             session_id=session_id,
         )
         self._notify_event(task_id, "task_succeeded")
+        self._cache_task(task)
         return task
 
     def mark_cancelled(
@@ -169,6 +183,7 @@ class NotifyingTripTaskStore:
             message=message,
         )
         self._notify_event(task_id, "task_cancelled")
+        self._cache_task(task)
         return task
 
     def mark_failed(
@@ -186,7 +201,16 @@ class NotifyingTripTaskStore:
             timed_out=timed_out,
         )
         self._notify_event(task_id, "task_timed_out" if timed_out else "task_failed")
+        self._cache_task(task)
         return task
+
+    def _cache_task(self, task: TripPlanningTask) -> None:
+        if self.snapshot_cache is not None:
+            self.snapshot_cache.set_task_progress(
+                task.task_id,
+                task,
+                terminal=task.terminal,
+            )
 
     def _notify_event(self, task_id: str, event_type: str) -> None:
         self._safe_notify(

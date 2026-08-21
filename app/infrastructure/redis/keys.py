@@ -89,6 +89,28 @@ class RedisKeyBuilder:
     def weather(self, payload: Any) -> str:
         return self.literal("cache", "weather", self.fingerprint(payload))
 
+    def business_cache(self, domain: str, payload: Any) -> str:
+        """构建天气、景点、酒店和地理编码等可重建结果的缓存 Key。"""
+
+        return self.literal(
+            "cache",
+            self._validate_literal(domain, "缓存领域"),
+            self.fingerprint(payload),
+        )
+
+    def execution_view(self, session_id: str) -> str:
+        return self.literal("snapshot", "execution-view", session_id)
+
+    def quota(self, *, provider: str, policy: str, identity: str) -> str:
+        """额度 Key 不包含 API Key、模型原文或用户输入。"""
+
+        return self.literal(
+            "quota",
+            self._validate_literal(provider, "供应商"),
+            self._validate_literal(policy, "配额策略"),
+            self.fingerprint(identity),
+        )
+
     def task_progress(self, task_id: str) -> str:
         return self.literal("task", "progress", task_id)
 

@@ -8,7 +8,12 @@ from typing import Any, Callable
 import requests
 
 from app.core.config import settings
+from app.infrastructure.redis.rate_limit import (
+    ProviderQuotaExceededError,
+    ProviderQuotaController,
+)
 from app.providers.amap.errors import AmapErrorKind, AmapProviderError, validate_amap_response
+from app.providers.amap.business_cache import AmapBusinessCache
 from app.providers.amap.models import (
     AttractionSearchResult,
     GeoPoint,
@@ -54,9 +59,23 @@ class AmapClient:
     """只负责高德 Web 服务的 HTTP 传输，返回供应商原始 JSON。"""
 
     http_get: HttpGet = staticmethod(requests.get)
+    quota_controller: ProviderQuotaController | None = None
 
     @classmethod
     def _get_json(cls, url: str, params: dict[str, Any]) -> dict[str, Any]:
+        # 所有高德真实 HTTP 请求在唯一传输入口执行跨实例额度检查。
+        controller = cls.quota_controller
+        if controller is not None:
+            try:
+                controller.acquire_amap()
+            except ProviderQuotaExceededError as exc:
+                raise AmapProviderError(
+                    str(exc),
+                    kind=AmapErrorKind.RATE_LIMIT,
+                    retryable=True,
+                    provider_code="LOCAL_AMAP_QUOTA_EXCEEDED",
+                    provider_message=str(exc),
+                ) from exc
         try:
             response = cls.http_get(
                 url,
@@ -311,13 +330,45 @@ class AmapProviderClient:
         raw_client: Any = AmapClient,
         route_cache: RouteCache | None = None,
         restaurant_cache: RestaurantCache | None = None,
+        business_cache: AmapBusinessCache | None = None,
     ):
         self.raw_client = raw_client
         self.route_cache = route_cache
         self.restaurant_cache = restaurant_cache
+        self.business_cache = business_cache
         self._city_code_cache: dict[str, str] = {}
 
     def search_pois(
+        self,
+        *,
+        city: str,
+        keywords: str,
+        types: str = "",
+        center: GeoPoint | None = None,
+        radius_meters: int | None = None,
+        limit: int | None = None,
+    ) -> PoiSearchResult:
+        maximum = max(0, limit if limit is not None else settings.AMAP_MAX_POI_CANDIDATES)
+        payload = {
+            "version": 1, "city": city, "keywords": keywords, "types": types,
+            "center": center.model_dump(mode="json") if center else None,
+            "radius_meters": radius_meters, "limit": maximum,
+        }
+        if self.business_cache is None:
+            return self._search_pois_uncached(
+                city=city, keywords=keywords, types=types, center=center,
+                radius_meters=radius_meters, limit=limit,
+            )
+        return self.business_cache.get_or_load(
+            domain="poi", key_payload=payload, model_type=PoiSearchResult,
+            ttl_seconds=settings.AMAP_POI_CACHE_TTL_SECONDS,
+            loader=lambda: self._search_pois_uncached(
+                city=city, keywords=keywords, types=types, center=center,
+                radius_meters=radius_meters, limit=limit,
+            ),
+        )
+
+    def _search_pois_uncached(
         self,
         *,
         city: str,
@@ -546,6 +597,16 @@ class AmapProviderClient:
             logger.warning("Restaurant cache write failed", exc_info=True)
 
     def get_poi_detail(self, poi_id: str) -> PoiDetailResult:
+        payload = {"version": 1, "poi_id": poi_id}
+        if self.business_cache is None:
+            return self._get_poi_detail_uncached(poi_id)
+        return self.business_cache.get_or_load(
+            domain="poi-detail", key_payload=payload, model_type=PoiDetailResult,
+            ttl_seconds=settings.AMAP_POI_CACHE_TTL_SECONDS,
+            loader=lambda: self._get_poi_detail_uncached(poi_id),
+        )
+
+    def _get_poi_detail_uncached(self, poi_id: str) -> PoiDetailResult:
         """获取单个地点详情；不存在时返回 found=false。"""
 
         raw = self.raw_client.poi_detail(poi_id)
@@ -553,6 +614,16 @@ class AmapProviderClient:
         return normalize_poi_detail(payload, poi_id=poi_id)
 
     def resolve_location(self, *, query: str, city: str = "") -> LocationResolutionResult:
+        payload = {"version": 1, "query": query, "city": city}
+        if self.business_cache is None:
+            return self._resolve_location_uncached(query=query, city=city)
+        return self.business_cache.get_or_load(
+            domain="geocode", key_payload=payload, model_type=LocationResolutionResult,
+            ttl_seconds=settings.AMAP_GEOCODE_CACHE_TTL_SECONDS,
+            loader=lambda: self._resolve_location_uncached(query=query, city=city),
+        )
+
+    def _resolve_location_uncached(self, *, query: str, city: str = "") -> LocationResolutionResult:
         """先用 POI 搜索解析地点，失败后再回退到地理编码。"""
 
         raw = self.raw_client.text_search(
@@ -614,6 +685,22 @@ class AmapProviderClient:
         city: str,
         keywords: str,
     ) -> AttractionSearchResult:
+        payload = {"version": 1, "city": city, "keywords": keywords,
+                   "limit": settings.AMAP_MAX_ATTRACTION_CANDIDATES}
+        if self.business_cache is None:
+            return self._search_attractions_uncached(city=city, keywords=keywords)
+        return self.business_cache.get_or_load(
+            domain="attraction", key_payload=payload, model_type=AttractionSearchResult,
+            ttl_seconds=settings.AMAP_ATTRACTION_CACHE_TTL_SECONDS,
+            loader=lambda: self._search_attractions_uncached(city=city, keywords=keywords),
+        )
+
+    def _search_attractions_uncached(
+        self,
+        *,
+        city: str,
+        keywords: str,
+    ) -> AttractionSearchResult:
         raw = self.raw_client.text_search(keywords=keywords, city=city)
         payload = validate_amap_response(raw)
         return normalize_attractions(
@@ -624,6 +711,36 @@ class AmapProviderClient:
         )
 
     def search_nearby_attractions(
+        self,
+        *,
+        city: str,
+        keywords: str,
+        center: GeoPoint,
+        radius_meters: int,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> NearbyAttractionSearchResult:
+        payload = {
+            "version": 1, "city": city, "keywords": keywords,
+            "center": center.model_dump(mode="json"), "radius_meters": radius_meters,
+            "page": page, "page_size": page_size,
+        }
+        if self.business_cache is None:
+            return self._search_nearby_attractions_uncached(
+                city=city, keywords=keywords, center=center,
+                radius_meters=radius_meters, page=page, page_size=page_size,
+            )
+        return self.business_cache.get_or_load(
+            domain="attraction-nearby", key_payload=payload,
+            model_type=NearbyAttractionSearchResult,
+            ttl_seconds=settings.AMAP_ATTRACTION_CACHE_TTL_SECONDS,
+            loader=lambda: self._search_nearby_attractions_uncached(
+                city=city, keywords=keywords, center=center,
+                radius_meters=radius_meters, page=page, page_size=page_size,
+            ),
+        )
+
+    def _search_nearby_attractions_uncached(
         self,
         *,
         city: str,
@@ -662,6 +779,22 @@ class AmapProviderClient:
         city: str,
         keywords: str = "酒店",
     ) -> HotelSearchResult:
+        payload = {"version": 1, "city": city, "keywords": keywords,
+                   "limit": settings.AMAP_MAX_HOTEL_CANDIDATES}
+        if self.business_cache is None:
+            return self._search_hotels_uncached(city=city, keywords=keywords)
+        return self.business_cache.get_or_load(
+            domain="hotel", key_payload=payload, model_type=HotelSearchResult,
+            ttl_seconds=settings.AMAP_HOTEL_CACHE_TTL_SECONDS,
+            loader=lambda: self._search_hotels_uncached(city=city, keywords=keywords),
+        )
+
+    def _search_hotels_uncached(
+        self,
+        *,
+        city: str,
+        keywords: str = "酒店",
+    ) -> HotelSearchResult:
         raw = self.raw_client.text_search(keywords=keywords, city=city)
         payload = validate_amap_response(raw)
         return normalize_hotels(
@@ -672,6 +805,16 @@ class AmapProviderClient:
         )
 
     def get_weather(self, city: str) -> WeatherSearchResult:
+        payload = {"version": 1, "city": city, "limit": settings.AMAP_MAX_WEATHER_DAYS}
+        if self.business_cache is None:
+            return self._get_weather_uncached(city)
+        return self.business_cache.get_or_load(
+            domain="weather", key_payload=payload, model_type=WeatherSearchResult,
+            ttl_seconds=settings.AMAP_WEATHER_CACHE_TTL_SECONDS,
+            loader=lambda: self._get_weather_uncached(city),
+        )
+
+    def _get_weather_uncached(self, city: str) -> WeatherSearchResult:
         raw = self.raw_client.get_weather(city)
         payload = validate_amap_response(raw)
         return normalize_weather(

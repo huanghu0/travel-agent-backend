@@ -20,18 +20,28 @@ from app.agent_runtime import (
 )
 from app.agents import PlannerAgent
 from app.core.config import settings
+from app.core.llm import configure_llm_quota_controller
 from app.evaluation import (
     AcceptanceScenario,
     FIXED_ACCEPTANCE_SCENARIOS,
     FixedAcceptanceBaselineReport,
 )
 from app.infrastructure.cache import CacheConfig, create_cache_store
+from app.infrastructure.cache.read_models import ReadModelSnapshotCache
 from app.infrastructure.redis import (
     RedisClientManager,
     RedisConfig,
     create_task_notification_bus,
 )
+from app.infrastructure.redis.rate_limit import (
+    NoOpRateLimiter,
+    ProviderQuotaController,
+    QuotaPolicy,
+    RedisRateLimiter,
+)
 from app.observability import RedisObservabilityConfig, RedisRuntimeObservability
+from app.providers.amap.business_cache import AmapBusinessCache
+from app.providers.amap.client import AmapClient, AmapProviderClient
 from app.providers.amap.layered_cache import (
     LayeredRestaurantCache,
     LayeredRouteCache,
@@ -86,6 +96,38 @@ task_notification_bus = create_task_notification_bus(
     client_manager=redis_client_manager,
     enabled=settings.REDIS_TASK_NOTIFICATIONS_ENABLED,
     reconnect_delay_seconds=settings.REDIS_TASK_NOTIFICATION_RECONNECT_SECONDS,
+)
+# Redis Lua 限流在所有实例间共享计数；Redis 关闭时使用 NoOp，故障时按配置 fail-open。
+rate_limiter = (
+    RedisRateLimiter(
+        redis_client_manager,
+        key_builder=redis_client_manager.key_builder,
+        fail_open=settings.REDIS_PROVIDER_RATE_LIMIT_FAIL_OPEN,
+    )
+    if settings.REDIS_ENABLED and settings.REDIS_PROVIDER_RATE_LIMIT_ENABLED
+    else NoOpRateLimiter()
+)
+provider_quota_controller = ProviderQuotaController(
+    rate_limiter,
+    amap_policies=(
+        QuotaPolicy("per-second", settings.AMAP_RATE_LIMIT_REQUESTS_PER_SECOND, 1),
+        QuotaPolicy("per-minute", settings.AMAP_QUOTA_REQUESTS_PER_MINUTE, 60),
+        QuotaPolicy("per-day", settings.AMAP_QUOTA_REQUESTS_PER_DAY, 86400),
+    ),
+    llm_policies=(
+        QuotaPolicy("per-minute", settings.LLM_QUOTA_REQUESTS_PER_MINUTE, 60),
+        QuotaPolicy("per-day", settings.LLM_QUOTA_REQUESTS_PER_DAY, 86400),
+    ),
+)
+configure_llm_quota_controller(provider_quota_controller)
+
+# execution-view 和任务进度只缓存前端读取快照，写入失败不影响事实数据。
+read_model_cache = ReadModelSnapshotCache(
+    cache_store,
+    redis_client_manager.key_builder,
+    execution_view_ttl_seconds=settings.EXECUTION_VIEW_CACHE_TTL_SECONDS,
+    task_active_ttl_seconds=settings.TASK_PROGRESS_CACHE_ACTIVE_TTL_SECONDS,
+    task_terminal_ttl_seconds=settings.TASK_PROGRESS_CACHE_TERMINAL_TTL_SECONDS,
 )
 
 @asynccontextmanager
@@ -165,13 +207,33 @@ restaurant_cache = (
     if restaurant_cache_l2 is not None
     else None
 )
-# 步骤 4：注册工具白名单。景点、天气、酒店直接调用高德，不经过 LLM。
+# 步骤 4：标准化高德业务结果使用 Redis-only 热缓存，路线/餐饮继续使用两级缓存。
+amap_business_cache = AmapBusinessCache(
+    cache_store,
+    redis_client_manager.key_builder,
+)
+
+
+class _QuotaAwareAmapClient(AmapClient):
+    """仅生产装配使用，避免全局类状态影响测试或显式注入的 Provider。"""
+
+    quota_controller = provider_quota_controller
+
+
+amap_provider = AmapProviderClient(
+    raw_client=_QuotaAwareAmapClient,
+    route_cache=route_cache,
+    restaurant_cache=restaurant_cache,
+    business_cache=amap_business_cache,
+)
+# 步骤 5：注册工具白名单。景点、天气、酒店直接调用高德，不经过 LLM。
 trip_tool_registry = build_trip_tool_registry(
     planner_agent=planner_agent,
+    map_provider=amap_provider,
     route_cache=route_cache,
     restaurant_cache=restaurant_cache,
 )
-# 步骤 5：编排器负责按固定状态机循环执行，并统一应用预算、重试和熔断策略。
+# 步骤 6：编排器负责按固定状态机循环执行，并统一应用预算、重试和熔断策略。
 trip_orchestrator = TripOrchestrator(
     tool_registry=trip_tool_registry,
     max_steps=settings.AGENT_MAX_STEPS,
@@ -303,6 +365,7 @@ trip_draft_service = TripDraftService(
 trip_task_store = NotifyingTripTaskStore(
     delegate=persistence_stores.trip_task_store,
     notification_bus=task_notification_bus,
+    snapshot_cache=read_model_cache,
 )
 trip_task_worker = TripTaskWorker(
     task_store=trip_task_store,
@@ -329,6 +392,8 @@ redis_observability = RedisRuntimeObservability(
     cache_store=cache_store,
     route_cache=route_cache,
     restaurant_cache=restaurant_cache,
+    business_cache=amap_business_cache,
+    rate_limiter=rate_limiter,
     worker=trip_task_worker,
     worker_fallback_poll_seconds=(
         settings.TRIP_TASK_NOTIFICATION_WORKER_FALLBACK_POLL_SECONDS
@@ -728,10 +793,19 @@ def get_trip_session(session_id: str):
 def get_trip_execution_view(session_id: str):
     """仅返回行程展示、真实路线、时间轴和质量报告，不返回完整 AgentState。"""
 
+    cached = read_model_cache.get_execution_view(session_id, TripExecutionView)
+    if cached is not None:
+        return cached
     try:
-        # 读取 SQLite 最近检查点后做只读投影，不触发工具或 LLM。
+        # Redis 未命中时读取最近检查点并生成投影；数据库仍是事实来源。
         state = agent_state_store.get_state(session_id)
-        return TripExecutionView.from_agent_state(state)
+        view = TripExecutionView.from_agent_state(state)
+        read_model_cache.set_execution_view(
+            session_id,
+            view,
+            active=state.status != "completed",
+        )
+        return view
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -803,7 +877,10 @@ def evaluate_trip_draft(session_id: str, draft_id: str):
 def confirm_trip_draft(session_id: str, draft_id: str):
     """确认后才更新 AgentState，继续修改则保留原确认版本。"""
     try:
-        return trip_draft_service.confirm_draft(session_id, draft_id)
+        response = trip_draft_service.confirm_draft(session_id, draft_id)
+        # 确认版本会更新 AgentState，必须淘汰旧的终态 execution-view 快照。
+        read_model_cache.delete_execution_view(session_id)
+        return response
     except (SessionNotFoundError, DraftNotFoundError, VersionNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DraftConflictError as exc:
@@ -848,7 +925,10 @@ def resume_trip_session(session_id: str):
         # 步骤 1：加载最近检查点。
         state = agent_state_store.get_state(session_id)
         # 步骤 2：编排器根据已存在的数据决定下一动作，不重复已成功的步骤。
-        return trip_orchestrator.resume(state)
+        resumed = trip_orchestrator.resume(state)
+        # 恢复执行可能推进时间轴、路线和质量状态，删除旧读模型供下次重建。
+        read_model_cache.delete_execution_view(session_id)
+        return resumed
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AgentCheckpointError as exc:
@@ -911,7 +991,9 @@ def health_check():
                 "schema_version": cache_store.schema_version,
                 "metrics": snapshot["cache_metrics"],
                 "layers": snapshot["layered_cache_metrics"],
+                "amap_business": snapshot["amap_business_cache_metrics"],
             },
+            "provider_quota": snapshot["provider_quota_metrics"],
         },
     }
 

@@ -230,6 +230,53 @@ class _RedisPrometheusCollector:
             )
         yield metric
 
+        quota = snapshot.get("provider_quota_metrics") or {}
+        if quota:
+            metric = CounterMetricFamily(
+                "travel_agent_provider_quota_checks_total",
+                "跨实例供应商请求额度检查结果。",
+                labels=["provider", "outcome"],
+            )
+            providers = sorted(
+                set(quota.get("provider_allowed", {}))
+                | set(quota.get("provider_rejected", {}))
+            )
+            for provider in providers:
+                metric.add_metric(
+                    [provider, "allowed"],
+                    quota.get("provider_allowed", {}).get(provider, 0),
+                )
+                metric.add_metric(
+                    [provider, "rejected"],
+                    quota.get("provider_rejected", {}).get(provider, 0),
+                )
+            yield metric
+
+            metric = CounterMetricFamily(
+                "travel_agent_provider_quota_degraded_total",
+                "Redis 限流故障后的 fail-open/fail-closed 次数。",
+                labels=["outcome"],
+            )
+            metric.add_metric(["allowed"], quota.get("degraded_allowed", 0))
+            metric.add_metric(["rejected"], quota.get("degraded_rejected", 0))
+            yield metric
+
+        business = snapshot.get("amap_business_cache_metrics") or {}
+        domains = business.get("domains", {})
+        if domains:
+            metric = CounterMetricFamily(
+                "travel_agent_amap_business_cache_operations_total",
+                "高德天气、景点、酒店和地理编码缓存结果。",
+                labels=["domain", "outcome"],
+            )
+            for domain, values in sorted(domains.items()):
+                for outcome in (
+                    "hits", "misses", "bypasses", "degraded_reads",
+                    "invalid_payloads", "writes", "degraded_writes", "provider_calls",
+                ):
+                    metric.add_metric([domain, outcome], values.get(outcome, 0))
+            yield metric
+
         metric = GaugeMetricFamily(
             "travel_agent_task_notification_fallback_poll_seconds",
             "Redis 通知丢失时的数据库兜底轮询间隔。",
@@ -252,6 +299,8 @@ class RedisRuntimeObservability:
         cache_store: Any,
         route_cache: Any = None,
         restaurant_cache: Any = None,
+        business_cache: Any = None,
+        rate_limiter: Any = None,
         worker: Any = None,
         worker_fallback_poll_seconds: float = 5.0,
         sse_fallback_poll_seconds: float = 5.0,
@@ -263,6 +312,8 @@ class RedisRuntimeObservability:
         self.cache_store = cache_store
         self.route_cache = route_cache
         self.restaurant_cache = restaurant_cache
+        self.business_cache = business_cache
+        self.rate_limiter = rate_limiter
         self.worker = worker
         self.worker_fallback_poll_seconds = worker_fallback_poll_seconds
         self.sse_fallback_poll_seconds = sse_fallback_poll_seconds
@@ -335,6 +386,16 @@ class RedisRuntimeObservability:
             if self.restaurant_cache
             else None
         )
+        business = (
+            self.business_cache.metrics_snapshot().model_dump()
+            if self.business_cache
+            else None
+        )
+        quota = (
+            self.rate_limiter.metrics_snapshot().model_dump()
+            if self.rate_limiter
+            else None
+        )
         with self._lock:
             alerts = self._alerts(health, notification, pool)
         return {
@@ -350,6 +411,8 @@ class RedisRuntimeObservability:
                 "route": route,
                 "restaurant": restaurant,
             },
+            "amap_business_cache_metrics": business,
+            "provider_quota_metrics": quota,
             "worker_running": bool(self.worker and self.worker.running),
             "tuning": {
                 "worker_fallback_poll_seconds": self.worker_fallback_poll_seconds,

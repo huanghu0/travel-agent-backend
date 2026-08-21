@@ -6,6 +6,7 @@ from typing import Any, Protocol
 from openai import OpenAI
 
 from app.core.config import settings
+from app.infrastructure.redis.rate_limit import ProviderQuotaController
 
 
 class LLMOutputTruncatedError(RuntimeError):
@@ -207,6 +208,16 @@ def _anthropic_response_diagnostics(response: Any) -> str:
     return ", ".join(details)
 
 
+def _acquire_llm_quota(
+    controller: ProviderQuotaController | None,
+    model: str,
+) -> None:
+    """在每一次真实模型网络请求前扣减跨实例请求额度。"""
+
+    if controller is not None:
+        controller.acquire_llm(model)
+
+
 class ResponsesLLM:
     """OpenAI 兼容的原生 Responses API 客户端。"""
 
@@ -217,8 +228,10 @@ class ResponsesLLM:
         model: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
+        quota_controller: ProviderQuotaController | None = None,
     ):
         self.model = model or settings.GPT_LLM_MODEL_ID
+        self.quota_controller = quota_controller
         if client is not None:
             self.client = client
             return
@@ -242,6 +255,7 @@ class ResponsesLLM:
             "instructions": instructions,
             "input": input_text,
         }
+        _acquire_llm_quota(self.quota_controller, self.model)
         responses_api = self.client.responses
         parse = getattr(responses_api, "parse", None)
         # 步骤 2：SDK 支持 parse 时直接请求 Pydantic 结构化输出，否则附加 JSON Schema。
@@ -307,8 +321,10 @@ class AnthropicLLM:
         api_key: str | None = None,
         base_url: str | None = None,
         max_tokens: int | None = None,
+        quota_controller: ProviderQuotaController | None = None,
     ):
         self.model = model or settings.CLAUDE_LLM_MODEL_ID
+        self.quota_controller = quota_controller
         self.max_tokens = max_tokens or settings.CLAUDE_LLM_MAX_TOKENS
         if client is not None:
             self.client = client
@@ -359,6 +375,7 @@ class AnthropicLLM:
 
         # 步骤 1：按原生 Anthropic Messages 协议发送 system 和 messages。
         messages = [{"role": "user", "content": input_text}]
+        _acquire_llm_quota(self.quota_controller, self.model)
         response = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
@@ -385,6 +402,7 @@ class AnthropicLLM:
             else:
                 retry_messages = messages
 
+            _acquire_llm_quota(self.quota_controller, self.model)
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -433,13 +451,26 @@ class AnthropicLLM:
         )
 
 
+_default_quota_controller: ProviderQuotaController | None = None
+
+
+def configure_llm_quota_controller(
+    controller: ProviderQuotaController | None,
+) -> None:
+    """仅影响后续由 create_llm 创建的生产客户端。"""
+
+    global _default_quota_controller
+    _default_quota_controller = controller
+    _llm_clients.clear()
+
+
 def create_llm(protocol: str | None = None) -> LLMClient:
     # 根据 LLM_PROTOCOL 创建与上游接口一致的原生客户端。
     selected = _normalize_protocol(protocol or settings.LLM_PROTOCOL)
     if selected == "responses":
-        return ResponsesLLM()
+        return ResponsesLLM(quota_controller=_default_quota_controller)
     if selected == "anthropic":
-        return AnthropicLLM()
+        return AnthropicLLM(quota_controller=_default_quota_controller)
     raise RuntimeError(
         f"Unsupported LLM_PROTOCOL: {selected}. "
         "Expected 'responses' or 'anthropic'."

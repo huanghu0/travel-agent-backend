@@ -146,6 +146,39 @@ class Settings:
         _env("REDIS_TASK_NOTIFICATION_RECONNECT_SECONDS", "1") or "1"
     )
 
+    # Redis 跨实例供应商限流。额度计数失败默认放行，主流程继续执行并记录降级指标。
+    REDIS_PROVIDER_RATE_LIMIT_ENABLED: bool = _env_bool(
+        "REDIS_PROVIDER_RATE_LIMIT_ENABLED", True
+    )
+    REDIS_PROVIDER_RATE_LIMIT_FAIL_OPEN: bool = _env_bool(
+        "REDIS_PROVIDER_RATE_LIMIT_FAIL_OPEN", True
+    )
+    AMAP_RATE_LIMIT_REQUESTS_PER_SECOND: int = int(
+        _env("AMAP_RATE_LIMIT_REQUESTS_PER_SECOND", "5") or "5"
+    )
+    AMAP_QUOTA_REQUESTS_PER_MINUTE: int = int(
+        _env("AMAP_QUOTA_REQUESTS_PER_MINUTE", "300") or "300"
+    )
+    AMAP_QUOTA_REQUESTS_PER_DAY: int = int(
+        _env("AMAP_QUOTA_REQUESTS_PER_DAY", "100000") or "100000"
+    )
+    LLM_QUOTA_REQUESTS_PER_MINUTE: int = int(
+        _env("LLM_QUOTA_REQUESTS_PER_MINUTE", "30") or "30"
+    )
+    LLM_QUOTA_REQUESTS_PER_DAY: int = int(
+        _env("LLM_QUOTA_REQUESTS_PER_DAY", "10000") or "10000"
+    )
+
+    # 前端只读快照缓存；MySQL/SQLite 始终是最终事实来源。
+    EXECUTION_VIEW_CACHE_TTL_SECONDS: int = int(
+        _env("EXECUTION_VIEW_CACHE_TTL_SECONDS", "1800") or "1800"
+    )
+    TASK_PROGRESS_CACHE_ACTIVE_TTL_SECONDS: int = int(
+        _env("TASK_PROGRESS_CACHE_ACTIVE_TTL_SECONDS", "3600") or "3600"
+    )
+    TASK_PROGRESS_CACHE_TERMINAL_TTL_SECONDS: int = int(
+        _env("TASK_PROGRESS_CACHE_TERMINAL_TTL_SECONDS", "86400") or "86400"
+    )
     # 生产可观测性：Prometheus 默认开放；OpenTelemetry 默认关闭，按部署环境启用。
     PROMETHEUS_METRICS_ENABLED: bool = _env_bool(
         "PROMETHEUS_METRICS_ENABLED", True
@@ -437,6 +470,22 @@ class Settings:
     )
     AMAP_RESTAURANT_CACHE_TTL_SECONDS: int = int(
         _env("AMAP_RESTAURANT_CACHE_TTL_SECONDS", "21600") or "21600"
+    )
+    # Redis-only 高德标准化结果缓存；未命中或 Redis 故障时直接回源 Provider。
+    AMAP_WEATHER_CACHE_TTL_SECONDS: int = int(
+        _env("AMAP_WEATHER_CACHE_TTL_SECONDS", "1800") or "1800"
+    )
+    AMAP_ATTRACTION_CACHE_TTL_SECONDS: int = int(
+        _env("AMAP_ATTRACTION_CACHE_TTL_SECONDS", "21600") or "21600"
+    )
+    AMAP_HOTEL_CACHE_TTL_SECONDS: int = int(
+        _env("AMAP_HOTEL_CACHE_TTL_SECONDS", "3600") or "3600"
+    )
+    AMAP_GEOCODE_CACHE_TTL_SECONDS: int = int(
+        _env("AMAP_GEOCODE_CACHE_TTL_SECONDS", "604800") or "604800"
+    )
+    AMAP_POI_CACHE_TTL_SECONDS: int = int(
+        _env("AMAP_POI_CACHE_TTL_SECONDS", "21600") or "21600"
     )
     AMAP_MAX_WEATHER_DAYS: int = int(
         _env("AMAP_MAX_WEATHER_DAYS", "7") or "7"
