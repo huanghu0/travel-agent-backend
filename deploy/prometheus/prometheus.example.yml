@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - redis-alerts.yml
+
+scrape_configs:
+  - job_name: travel-agent-backend
+    metrics_path: /metrics
+    static_configs:
+      # 容器部署时替换为真实服务名；本机运行可改为 host.docker.internal:8000。
+      - targets: ["travel-agent-backend:8000"]

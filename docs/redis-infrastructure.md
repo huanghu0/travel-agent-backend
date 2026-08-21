@@ -29,7 +29,7 @@ REDIS_DB=0
 REDIS_USERNAME=
 REDIS_PASSWORD=
 REDIS_SSL=false
-REDIS_MAX_CONNECTIONS=20
+REDIS_MAX_CONNECTIONS=32
 REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS=3
 REDIS_SOCKET_TIMEOUT_SECONDS=5
 REDIS_HEALTH_CHECK_INTERVAL_SECONDS=30
@@ -293,8 +293,26 @@ TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS=5
 build/reports/redis-runtime-acceptance.json
 ```
 
-## 14. 下一阶段
+## 14. 生产可观测性与压力基线
 
-- 增加跨实例共享限流和供应商调用配额；
-- 将进程内指标映射到 Prometheus/OpenTelemetry，支持多实例聚合；
-- 根据生产指标调整通知兜底轮询间隔和告警阈值。
+Redis 第二阶段生产化能力已经完成：
+
+- `/metrics` 暴露低基数 Prometheus 指标；
+- `/api/observability/redis` 返回脱敏健康、连接池、通知和告警快照；
+- 可选 OpenTelemetry OTLP Metrics 导出；
+- `deploy/prometheus/redis-alerts.yml` 提供 Redis 降级、订阅异常和连接池容量告警；
+- `scripts/run_redis_load_test.py` 验证并发命令和 Pub/Sub 端到端延迟；
+- 本机 20 并发基线将 `REDIS_MAX_CONNECTIONS` 从 20 调整为 32；
+- 通知接收率和延迟满足基线，Worker/SSE 数据库兜底间隔继续保持 5 秒。
+
+详细配置、指标清单、压力结果和调优方法见：
+
+```text
+docs/redis-production-observability.md
+```
+
+## 15. 后续阶段
+
+- 增加 Redis 跨实例共享限流和高德/LLM 调用配额；
+- 接入实际 Prometheus、Alertmanager 和 OpenTelemetry Collector 环境；
+- 根据生产多实例指标持续校准连接池、通知间隔和告警阈值。

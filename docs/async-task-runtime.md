@@ -164,3 +164,15 @@ TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS=5
 - 跨进程取消、真实 SSE 路由、`Last-Event-ID` 回放及重复通知去重。
 
 MySQL 仍是任务状态、取消标志、Worker 租约和 SSE 事件的唯一事实来源。Redis 验收失败或运行期不可用只会降低唤醒速度，不能改变数据库事实或阻断任务轮询。脚本会拒绝正式 `MYSQL_DATABASE`，必须使用独立 `MYSQL_TEST_DATABASE`。
+
+
+## 11. Redis 生产可观测性与轮询调优
+
+任务通知运行时现在同时提供：
+
+- Prometheus Worker/SSE 通知唤醒、数据库兜底和通知降级指标；
+- `/api/observability/redis` 连接池、订阅状态和结构化告警；
+- Redis Pub/Sub 端到端压力脚本；
+- 根据通知接收率和端到端 P95 生成轮询间隔建议。
+
+2026-08-21 本机 20 并发基线中，通知接收率为 100%，端到端 P95 为 0.262ms。因此当前继续使用 Worker 5 秒、SSE 5 秒数据库兜底；Redis 正常时仍由 Pub/Sub 立即唤醒，不会等待 5 秒。详细结果见 `docs/redis-production-observability.md`。

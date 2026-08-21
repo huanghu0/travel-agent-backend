@@ -1,0 +1,47 @@
+groups:
+  - name: travel-agent-redis
+    rules:
+      - alert: TravelAgentRedisUnavailable
+        expr: travel_agent_redis_degraded == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "旅行智能体 Redis 已降级"
+          description: "Redis 连续不可用超过 1 分钟，缓存和任务通知正在回退 MySQL/Provider。"
+
+      - alert: TravelAgentRedisNotificationSubscriberDown
+        expr: travel_agent_redis_notification_degraded == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 任务通知订阅异常"
+          description: "Worker 和 SSE 已回退数据库轮询，请检查 Redis Pub/Sub 连接。"
+
+      - alert: TravelAgentRedisPoolNearCapacity
+        expr: travel_agent_redis_pool_utilization_ratio >= 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 连接池接近容量上限"
+          description: "连接池使用率连续 5 分钟超过 80%，请结合压力报告调整 REDIS_MAX_CONNECTIONS。"
+
+      - alert: TravelAgentRedisPublishDegraded
+        expr: increase(travel_agent_redis_notification_failures_total{kind="publish_degraded"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 通知发布发生降级"
+          description: "最近 5 分钟出现通知发布失败，业务仍由数据库保证，但唤醒延迟可能增加。"
+
+      - alert: TravelAgentRedisFallbackPollingHigh
+        expr: rate(travel_agent_task_notification_waits_total{result="poll_timeout"}[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "任务通知数据库兜底轮询偏高"
+          description: "Redis 通知未能有效减少数据库轮询，请检查通知可靠性和轮询间隔。"

@@ -2,6 +2,8 @@
 
 from app.infrastructure.redis.client import (
     RedisClientManager,
+    RedisClientMetrics,
+    RedisPoolSnapshot,
     RedisHealth,
     RedisHealthStatus,
     create_redis_client,
@@ -16,6 +18,8 @@ from app.infrastructure.redis.task_notifications import (
 
 __all__ = [
     "RedisClientManager",
+    "RedisClientMetrics",
+    "RedisPoolSnapshot",
     "RedisConfig",
     "RedisHealth",
     "RedisHealthStatus",

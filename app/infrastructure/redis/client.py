@@ -27,6 +27,37 @@ class RedisHealthStatus(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class RedisClientMetrics:
+    """Redis 客户端累计指标；只记录连接运行状态，不记录 Key 或业务参数。"""
+
+    operation_requests: int = 0
+    operation_successes: int = 0
+    operation_failures: int = 0
+    operation_bypasses: int = 0
+    health_checks: int = 0
+    health_check_failures: int = 0
+    degraded_transitions: int = 0
+    recoveries: int = 0
+
+    def model_dump(self) -> dict[str, int]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class RedisPoolSnapshot:
+    """连接池容量快照；读取 redis-py 池状态时保持容错。"""
+
+    max_connections: int
+    created_connections: int
+    in_use_connections: int
+    available_connections: int
+    utilization: float
+
+    def model_dump(self) -> dict[str, int | float]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class RedisHealth:
     """Redis 组件健康状态；错误信息经过密码擦除。"""
 
@@ -98,6 +129,11 @@ class RedisClientManager:
         self._client: Redis | None = None
         self._degraded_until = 0.0
         self._last_error: str | None = None
+        self._degraded = False
+        self._degraded_since = 0.0
+        self._metrics: dict[str, int] = {
+            name: 0 for name in RedisClientMetrics.__dataclass_fields__
+        }
 
     @property
     def key_builder(self):
@@ -127,17 +163,68 @@ class RedisClientManager:
     ) -> T | None:
         """执行非关键 Redis 操作；连接故障时自动降级并返回 fallback。"""
 
+        with self._lock:
+            self._metrics["operation_requests"] += 1
         try:
             client = self.get_client()
             if client is None:
+                with self._lock:
+                    self._metrics["operation_bypasses"] += 1
                 return fallback
             result = operation(client)
         except (RedisError, OSError, TimeoutError) as exc:
+            with self._lock:
+                self._metrics["operation_failures"] += 1
             # 客户端创建、连接获取和具体命令任一环节失败都进入同一降级路径。
             self._mark_degraded(exc)
             return fallback
+        with self._lock:
+            self._metrics["operation_successes"] += 1
         self._mark_healthy()
         return result
+
+    def metrics_snapshot(self) -> RedisClientMetrics:
+        """返回线程安全累计指标，供 Prometheus/OpenTelemetry 读取。"""
+
+        with self._lock:
+            return RedisClientMetrics(**self._metrics)
+
+    def pool_snapshot(self) -> RedisPoolSnapshot:
+        """返回当前进程连接池使用量；Redis 未创建连接时数值为零。"""
+
+        with self._lock:
+            client = self._client
+            max_connections = max(1, int(self.config.max_connections))
+        if client is None:
+            return RedisPoolSnapshot(max_connections, 0, 0, 0, 0.0)
+        pool = getattr(client, "connection_pool", None)
+        lock = getattr(pool, "_lock", None)
+        if lock is None:
+            return self._read_pool_snapshot(pool, max_connections)
+        with lock:
+            return self._read_pool_snapshot(pool, max_connections)
+
+    @staticmethod
+    def _read_pool_snapshot(pool: Any, max_connections: int) -> RedisPoolSnapshot:
+        available = len(getattr(pool, "_available_connections", ()) or ())
+        in_use = len(getattr(pool, "_in_use_connections", ()) or ())
+        created = int(getattr(pool, "_created_connections", available + in_use) or 0)
+        utilization = min(1.0, max(0.0, in_use / max_connections))
+        return RedisPoolSnapshot(
+            max_connections=max_connections,
+            created_connections=created,
+            in_use_connections=in_use,
+            available_connections=available,
+            utilization=utilization,
+        )
+
+    def degraded_duration_seconds(self) -> float:
+        """返回当前连续降级时长；恢复后立即归零。"""
+
+        with self._lock:
+            if not self._degraded or self._degraded_since <= 0:
+                return 0.0
+            return max(0.0, self._monotonic() - self._degraded_since)
 
     def check_health(self) -> RedisHealth:
         """执行 PING；健康检查会绕过冷却期，以便 Redis 恢复后立即自愈。"""
@@ -151,12 +238,16 @@ class RedisClientManager:
                 degraded=False,
             )
 
+        with self._lock:
+            self._metrics["health_checks"] += 1
         started_at = self._monotonic()
         try:
             client = self.get_client(force_retry=True)
             if client is None or client.ping() is not True:
                 raise ConnectionError("Redis PING 未返回成功")
         except (RedisError, OSError, TimeoutError, ConnectionError) as exc:
+            with self._lock:
+                self._metrics["health_check_failures"] += 1
             self._mark_degraded(exc)
             return RedisHealth(
                 enabled=True,
@@ -180,6 +271,10 @@ class RedisClientManager:
 
     def _mark_healthy(self) -> None:
         with self._lock:
+            if self._degraded:
+                self._metrics["recoveries"] += 1
+            self._degraded = False
+            self._degraded_since = 0.0
             self._degraded_until = 0.0
             self._last_error = None
 
@@ -191,7 +286,11 @@ class RedisClientManager:
     def _mark_degraded(self, exc: Exception) -> None:
         safe_error = _safe_error_message(exc, self.config)
         with self._lock:
-            first_failure = self._last_error is None
+            first_failure = not self._degraded
+            if first_failure:
+                self._degraded = True
+                self._degraded_since = self._monotonic()
+                self._metrics["degraded_transitions"] += 1
             self._last_error = safe_error
             self._degraded_until = (
                 self._monotonic() + self.config.degrade_cooldown_seconds

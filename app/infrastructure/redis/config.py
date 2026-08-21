@@ -17,7 +17,7 @@ class RedisConfig:
     username: str | None = None
     password: str | None = None
     ssl: bool = False
-    max_connections: int = 20
+    max_connections: int = 32
     socket_connect_timeout_seconds: float = 3.0
     socket_timeout_seconds: float = 5.0
     health_check_interval_seconds: int = 30

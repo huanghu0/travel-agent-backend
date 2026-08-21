@@ -6,7 +6,7 @@ from typing import Literal
 from fastapi import FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from app.agent_runtime import (
     AgentActionError,
@@ -31,6 +31,7 @@ from app.infrastructure.redis import (
     RedisConfig,
     create_task_notification_bus,
 )
+from app.observability import RedisObservabilityConfig, RedisRuntimeObservability
 from app.providers.amap.layered_cache import (
     LayeredRestaurantCache,
     LayeredRouteCache,
@@ -93,6 +94,7 @@ async def lifespan(_: FastAPI):
 
     # 先启动订阅器，再启动 Worker，避免服务启动窗口内错过新任务通知。
     task_notification_bus.start()
+    redis_observability.start()
     if settings.TRIP_TASK_WORKER_ENABLED:
         trip_task_worker.start()
     try:
@@ -101,6 +103,7 @@ async def lifespan(_: FastAPI):
         if settings.TRIP_TASK_WORKER_ENABLED:
             trip_task_worker.stop()
         task_notification_bus.stop()
+        redis_observability.stop()
         # Redis 属于可选加速层，关闭失败不能阻塞应用退出。
         redis_client_manager.close()
 
@@ -315,6 +318,23 @@ trip_task_worker = TripTaskWorker(
         lease_seconds=settings.TRIP_TASK_LEASE_SECONDS,
         heartbeat_interval_seconds=settings.TRIP_TASK_HEARTBEAT_SECONDS,
         shutdown_timeout_seconds=settings.TRIP_TASK_SHUTDOWN_TIMEOUT_SECONDS,
+    ),
+)
+
+# Redis 生产可观测性统一读取现有累计指标，不记录 Key、任务内容或用户输入。
+redis_observability = RedisRuntimeObservability(
+    config=RedisObservabilityConfig.from_settings(settings),
+    client_manager=redis_client_manager,
+    notification_bus=task_notification_bus,
+    cache_store=cache_store,
+    route_cache=route_cache,
+    restaurant_cache=restaurant_cache,
+    worker=trip_task_worker,
+    worker_fallback_poll_seconds=(
+        settings.TRIP_TASK_NOTIFICATION_WORKER_FALLBACK_POLL_SECONDS
+    ),
+    sse_fallback_poll_seconds=(
+        settings.TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS
     ),
 )
 
@@ -850,37 +870,47 @@ def resume_trip_session(session_id: str):
         ) from exc
 
 
+@app.get(
+    redis_observability.config.prometheus_path,
+    include_in_schema=False,
+)
+def prometheus_metrics():
+    """输出 Prometheus 文本协议；指标只使用固定低基数标签。"""
+
+    if not redis_observability.config.prometheus_enabled:
+        raise HTTPException(status_code=404, detail="Prometheus 指标端点未启用")
+    payload, content_type = redis_observability.prometheus_payload()
+    return Response(content=payload, media_type=content_type)
+
+
+@app.get("/api/observability/redis", summary="Redis 生产可观测状态")
+def redis_observability_snapshot():
+    """返回连接池、通知、告警和调优参数的脱敏快照。"""
+
+    return redis_observability.snapshot()
+
+
 # 健康检查
 @app.get("/api/health", summary="服务健康检查")
 def health_check():
     # Redis 是非关键组件：不可用时报告 degraded，但主服务继续通过健康检查。
-    redis_health = redis_client_manager.check_health()
-    notification_health = task_notification_bus.health_snapshot()
-    cache_metrics = cache_store.metrics_snapshot()
+    snapshot = redis_observability.snapshot()
     return {
         "status": "ok",
         "message": "旅行助手服务运行正常",
-        "degraded": redis_health.degraded or notification_health.degraded,
+        "degraded": snapshot["degraded"],
         "components": {
-            "redis": redis_health.model_dump(),
-            "redis_notifications": notification_health.model_dump(),
+            "redis": snapshot["health"],
+            "redis_client": snapshot["client_metrics"],
+            "redis_pool": snapshot["pool"],
+            "redis_notifications": snapshot["notification_health"],
+            "redis_alerts": snapshot["alerts"],
             "cache": {
                 "backend": cache_store.backend_name,
                 "enabled": cache_store.enabled,
                 "schema_version": cache_store.schema_version,
-                "metrics": cache_metrics.model_dump(),
-                "layers": {
-                    "route": (
-                        route_cache.metrics_snapshot().model_dump()
-                        if route_cache is not None
-                        else None
-                    ),
-                    "restaurant": (
-                        restaurant_cache.metrics_snapshot().model_dump()
-                        if restaurant_cache is not None
-                        else None
-                    ),
-                },
+                "metrics": snapshot["cache_metrics"],
+                "layers": snapshot["layered_cache_metrics"],
             },
         },
     }

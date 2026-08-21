@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from redis.exceptions import RedisError
 
@@ -32,6 +32,7 @@ class RedisTaskNotificationBus(NoOpTaskNotificationBus):
         enabled: bool = True,
         reconnect_delay_seconds: float = 1.0,
         coordinator: TaskWakeCoordinator | None = None,
+        message_observer: Callable[[TaskNotificationMessage], None] | None = None,
     ) -> None:
         super().__init__(coordinator=coordinator)
         self.client_manager = client_manager
@@ -49,6 +50,8 @@ class RedisTaskNotificationBus(NoOpTaskNotificationBus):
         self._thread: threading.Thread | None = None
         self._lifecycle_lock = threading.Lock()
         self._subscriber_error = False
+        # 仅供压测/诊断观察端到端消息延迟；业务逻辑不能依赖该回调。
+        self._message_observer = message_observer
 
     @property
     def enabled(self) -> bool:
@@ -199,6 +202,14 @@ class RedisTaskNotificationBus(NoOpTaskNotificationBus):
         elif message.kind == "cancellation":
             self._increment("received_cancellations")
             self.coordinator.signal_cancellation(message.task_id)
+
+        observer = self._message_observer
+        if observer is not None:
+            try:
+                observer(message)
+            except Exception:
+                # 观测回调不能破坏 Redis 订阅线程或业务唤醒链路。
+                logger.debug("Redis 通知观测回调执行失败", exc_info=True)
 
     def health_snapshot(self) -> TaskNotificationHealth:
         degraded = self.enabled and (

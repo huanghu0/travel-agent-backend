@@ -98,7 +98,7 @@ class Settings:
     REDIS_PASSWORD: Optional[str] = _env("REDIS_PASSWORD")
     REDIS_SSL: bool = _env_bool("REDIS_SSL", False)
     REDIS_MAX_CONNECTIONS: int = int(
-        _env("REDIS_MAX_CONNECTIONS", "20") or "20"
+        _env("REDIS_MAX_CONNECTIONS", "32") or "32"
     )
     REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: float = float(
         _env("REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS", "3") or "3"
@@ -144,6 +144,36 @@ class Settings:
     )
     REDIS_TASK_NOTIFICATION_RECONNECT_SECONDS: float = float(
         _env("REDIS_TASK_NOTIFICATION_RECONNECT_SECONDS", "1") or "1"
+    )
+
+    # 生产可观测性：Prometheus 默认开放；OpenTelemetry 默认关闭，按部署环境启用。
+    PROMETHEUS_METRICS_ENABLED: bool = _env_bool(
+        "PROMETHEUS_METRICS_ENABLED", True
+    )
+    PROMETHEUS_METRICS_PATH: str = (
+        _env("PROMETHEUS_METRICS_PATH", "/metrics") or "/metrics"
+    )
+    OTEL_METRICS_ENABLED: bool = _env_bool("OTEL_METRICS_ENABLED", False)
+    OTEL_SERVICE_NAME: str = (
+        _env("OTEL_SERVICE_NAME", "travel-agent-backend")
+        or "travel-agent-backend"
+    )
+    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: str = (
+        _env(
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+            "http://127.0.0.1:4318/v1/metrics",
+        )
+        or "http://127.0.0.1:4318/v1/metrics"
+    )
+    OTEL_METRIC_EXPORT_INTERVAL_SECONDS: float = float(
+        _env("OTEL_METRIC_EXPORT_INTERVAL_SECONDS", "30") or "30"
+    )
+    REDIS_ALERTS_ENABLED: bool = _env_bool("REDIS_ALERTS_ENABLED", True)
+    REDIS_ALERT_DEGRADED_AFTER_SECONDS: float = float(
+        _env("REDIS_ALERT_DEGRADED_AFTER_SECONDS", "30") or "30"
+    )
+    REDIS_ALERT_POOL_UTILIZATION_THRESHOLD: float = float(
+        _env("REDIS_ALERT_POOL_UTILIZATION_THRESHOLD", "0.8") or "0.8"
     )
 
     # AgentState 持久化检查点与有界确定性执行循环。
