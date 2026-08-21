@@ -145,3 +145,22 @@ TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS=5
 - SSE 通知唤醒与数据库兜底超时；
 - 取消快速路径命中和数据库取消检查次数；
 - 非法消息和订阅重连次数。
+
+## 10. 跨进程故障恢复验收
+
+异步运行时提供独立的真实验收脚本，验证多进程行为，不调用高德和 LLM：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_redis_runtime_acceptance.py `
+  --database travel_agent_test `
+  --json-report build\reports\redis-runtime-acceptance.json
+```
+
+该脚本覆盖：
+
+- Redis Pub/Sub 跨进程任务、事件和取消通知；
+- 三个 MySQL Worker 并发领取及租约互斥；
+- Redis 故障期间的数据库兜底和恢复后的自动重连；
+- 跨进程取消、真实 SSE 路由、`Last-Event-ID` 回放及重复通知去重。
+
+MySQL 仍是任务状态、取消标志、Worker 租约和 SSE 事件的唯一事实来源。Redis 验收失败或运行期不可用只会降低唤醒速度，不能改变数据库事实或阻断任务轮询。脚本会拒绝正式 `MYSQL_DATABASE`，必须使用独立 `MYSQL_TEST_DATABASE`。

@@ -1,6 +1,6 @@
 # Redis 通用缓存与高德分层缓存（阶段一至阶段三）
 
-更新日期：2026-08-20
+更新日期：2026-08-21
 
 ## 1. 当前定位
 
@@ -206,6 +206,7 @@ Redis 不可用时顶层服务仍返回 `status=ok`，并使用 `degraded=true` 
 .\.venv\Scripts\python.exe -m unittest tests.test_cache_infrastructure -v
 .\.venv\Scripts\python.exe -m unittest tests.test_layered_amap_cache -v
 .\.venv\Scripts\python.exe -m unittest tests.test_task_notifications -v
+.\.venv\Scripts\python.exe -m unittest tests.test_redis_runtime_acceptance -v
 .\.venv\Scripts\python.exe scripts\check_redis.py --require-enabled --cache-smoke-test
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
@@ -257,7 +258,42 @@ TRIP_TASK_NOTIFICATION_WORKER_FALLBACK_POLL_SECONDS=5
 TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS=5
 ```
 
-## 13. 下一阶段
+## 13. Redis 任务运行时端到端验收
+
+`scripts/run_redis_runtime_acceptance.py` 是 Redis Pub/Sub 和异步任务运行时的真实跨进程冒烟脚本。它不会调用高德或 LLM，只验证 Redis 通知层与 MySQL 事实层之间的协作。
+
+运行前要求：
+
+- `DATABASE_BACKEND=mysql`；
+- `MYSQL_TEST_DATABASE` 已创建并应用当前 Alembic Schema；
+- `MYSQL_TEST_DATABASE` 与正式 `MYSQL_DATABASE` 不同；
+- 本机 Redis 可用且 `REDIS_ENABLED=true`；
+- 本机可找到 `redis-server`，或通过 `--redis-server` 显式指定路径。
+
+执行命令：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_redis_runtime_acceptance.py `
+  --database travel_agent_test `
+  --json-report build\reports\redis-runtime-acceptance.json
+```
+
+脚本使用唯一 Redis Key 前缀，并且只清理测试库中 `redis-acceptance-` 前缀创建的任务。故障注入会启动并停止一个随机端口的临时 Redis，不会关闭开发机正在使用的 `6379` Redis 服务。
+
+四项验收标准：
+
+1. `redis_pubsub_cross_process`：独立进程能够收到任务、事件和取消三个频道的通知；
+2. `mysql_multi_worker_concurrency`：三个 Worker 并发领取三个不同任务，任务不被重复执行；
+3. `redis_failure_and_recovery`：Redis 中断时自动降级，恢复后订阅线程自动重连并继续接收通知；
+4. `sse_and_cancellation_cross_process`：跨进程取消信号能快速传播，SSE 只按 MySQL `event_id` 回放一次取消和终态事件。
+
+验收通过条件为 `4/4 passed`。结构化脱敏结果默认写入：
+
+```text
+build/reports/redis-runtime-acceptance.json
+```
+
+## 14. 下一阶段
 
 - 增加跨实例共享限流和供应商调用配额；
 - 将进程内指标映射到 Prometheus/OpenTelemetry，支持多实例聚合；
