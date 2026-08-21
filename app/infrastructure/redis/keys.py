@@ -92,6 +92,21 @@ class RedisKeyBuilder:
     def task_progress(self, task_id: str) -> str:
         return self.literal("task", "progress", task_id)
 
+    def task_notification_channel(self) -> str:
+        """Worker 新任务通知频道；频道名只由可信环境前缀构成。"""
+
+        return self.literal("notify", "tasks")
+
+    def task_event_channel(self) -> str:
+        """SSE 事件唤醒频道；真实事件仍从 MySQL/SQLite 回放。"""
+
+        return self.literal("notify", "events")
+
+    def task_cancellation_channel(self) -> str:
+        """执行中取消的快速广播频道。"""
+
+        return self.literal("notify", "cancellations")
+
     def session(self, session_id: str) -> str:
         return self.literal("session", session_id)
 

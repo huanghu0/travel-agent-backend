@@ -162,6 +162,9 @@ travel-agent:dev:cache:weather:{sha256}
 travel-agent:dev:task:progress:{task_id}
 travel-agent:dev:session:{session_id}
 travel-agent:dev:lock:{namespace}:{sha256}
+travel-agent:dev:notify:tasks
+travel-agent:dev:notify:events
+travel-agent:dev:notify:cancellations
 ```
 
 复杂查询条件使用稳定 JSON 和 SHA-256，避免把地址与偏好原文写入 Key。可信 ID 使用 literal Key，并限制字符集、段长度和总字节数。
@@ -178,6 +181,7 @@ GET /api/health
 
 - `redis`：连接健康、目标、延迟和降级状态；
 - `cache`：当前 backend、enabled、schema version、通用缓存指标，以及 `layers.route`、`layers.restaurant` 的 L1/L2/Provider 分层指标。
+- `redis_notifications`：任务通知开关、订阅线程、降级状态、频道和 Worker/SSE/取消指标。
 
 Redis 不可用时顶层服务仍返回 `status=ok`，并使用 `degraded=true` 表示非关键组件降级。
 
@@ -201,6 +205,7 @@ Redis 不可用时顶层服务仍返回 `status=ok`，并使用 `degraded=true` 
 .\.venv\Scripts\python.exe -m unittest tests.test_redis_infrastructure -v
 .\.venv\Scripts\python.exe -m unittest tests.test_cache_infrastructure -v
 .\.venv\Scripts\python.exe -m unittest tests.test_layered_amap_cache -v
+.\.venv\Scripts\python.exe -m unittest tests.test_task_notifications -v
 .\.venv\Scripts\python.exe scripts\check_redis.py --require-enabled --cache-smoke-test
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
@@ -224,8 +229,36 @@ travel-agent:dev:cache:route:{route_cache_sha256}
 travel-agent:dev:cache:restaurant:{restaurant_cache_sha256}
 ```
 
-## 12. 下一阶段
+## 12. Redis 任务通知、取消与 SSE 唤醒
 
-- 接入任务通知、取消/SSE 唤醒，降低 Worker 和前端轮询延迟；
-- 增加共享限流和分布式协调；
-- 将进程内指标映射到 Prometheus/OpenTelemetry，支持多实例聚合。
+当前已实现三个版本化 Pub/Sub 频道：
+
+```text
+travel-agent:dev:notify:tasks
+travel-agent:dev:notify:events
+travel-agent:dev:notify:cancellations
+```
+
+消息只包含 `schema_version`、`kind`、`task_id`、可选事件标识和发布时间，不包含城市、路线、偏好或用户输入。
+
+- 新任务提交 MySQL 后发布 `task_available`；
+- 进度事件提交 MySQL 后发布 `task_event`；
+- 取消标记提交 MySQL 后发布 `cancellation`；
+- 单个应用实例只运行一个订阅线程，收到消息后唤醒本地 Worker、TaskExecutionContext 或 SSE waiter；
+- SSE 永远从 MySQL/SQLite 读取真实事件，Redis 重复消息不会破坏 `Last-Event-ID` 去重；
+- Redis 故障时自动按配置间隔回退数据库轮询，并在后台自动重连。
+
+配置：
+
+```env
+REDIS_TASK_NOTIFICATIONS_ENABLED=true
+REDIS_TASK_NOTIFICATION_RECONNECT_SECONDS=1
+TRIP_TASK_NOTIFICATION_WORKER_FALLBACK_POLL_SECONDS=5
+TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS=5
+```
+
+## 13. 下一阶段
+
+- 增加跨实例共享限流和供应商调用配额；
+- 将进程内指标映射到 Prometheus/OpenTelemetry，支持多实例聚合；
+- 根据生产指标调整通知兜底轮询间隔和告警阈值。

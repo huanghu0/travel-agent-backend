@@ -8,6 +8,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Iterator, TYPE_CHECKING
 
+from app.infrastructure.notifications import TaskNotificationBus
+
 from app.task_runtime.progress import action_progress, stage_name
 
 if TYPE_CHECKING:
@@ -24,6 +26,7 @@ class TaskExecutionContext:
     task_id: str
     worker_id: str
     store: "TripTaskStore"
+    notification_bus: TaskNotificationBus | None = None
     # 记录当前物理根动作开始前的历史长度，避免最后一个压缩子动作覆盖根动作结果。
     action_history_start: int = 0
 
@@ -34,6 +37,15 @@ class TaskExecutionContext:
 
     def check_cancelled(self) -> None:
         self.check_ownership()
+        # Redis 取消消息只会在数据库取消事务成功后发送，因此可作为可信快速路径。
+        # 未收到或丢失消息时仍查询 MySQL/SQLite，保证取消最终一定生效。
+        if self.notification_bus is not None and self.notification_bus.is_cancel_signalled(
+            self.task_id
+        ):
+            self.notification_bus.record_cancel_fast_path()
+            raise TaskCancellationRequested("用户已取消旅行规划任务")
+        if self.notification_bus is not None:
+            self.notification_bus.record_mysql_poll_fallback()
         if self.store.is_cancel_requested(self.task_id):
             raise TaskCancellationRequested("用户已取消旅行规划任务")
 

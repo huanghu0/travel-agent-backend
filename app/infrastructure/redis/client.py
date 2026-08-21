@@ -183,6 +183,11 @@ class RedisClientManager:
             self._degraded_until = 0.0
             self._last_error = None
 
+    def report_healthy(self) -> None:
+        """供 Pub/Sub 等长连接在成功建立后同步健康状态。"""
+
+        self._mark_healthy()
+
     def _mark_degraded(self, exc: Exception) -> None:
         safe_error = _safe_error_message(exc, self.config)
         with self._lock:
@@ -205,6 +210,11 @@ class RedisClientManager:
                 self.config.safe_target(),
                 safe_error,
             )
+
+    def report_failure(self, exc: Exception) -> None:
+        """供不经过 ``execute`` 的长连接统一进入自动降级冷却。"""
+
+        self._mark_degraded(exc)
 
     def close(self) -> None:
         """应用关闭时释放连接池；重复调用安全。"""

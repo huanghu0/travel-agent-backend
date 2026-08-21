@@ -11,17 +11,24 @@
 ```mermaid
 flowchart LR
     A["前端创建任务"] -->|"POST /api/trip/tasks + Idempotency-Key"| B["MySQL trip_planning_tasks"]
-    B --> C["TripTaskWorker 原子领取"]
+    B --> J["Redis task_available 唤醒"]
+    J --> C["TripTaskWorker 原子领取"]
+    B -. "通知丢失时定时轮询" .-> C
     C --> D["TripOrchestrator"]
     D --> E["高德 / LLM 工具"]
     D --> F["MySQL AgentState 检查点"]
     C --> G["MySQL trip_task_events"]
+    G --> K["Redis task_event 唤醒"]
+    K --> H["SSE 重新读取 MySQL"]
     G -->|"SSE id + Last-Event-ID"| H["规划进度页"]
-    H -->|"取消"| B
+    H -->|"取消写 MySQL + Redis 广播"| B
     C -->|"成功 result_session_id"| I["/result/:sessionId"]
 ```
 
 - `app/task_runtime/store.py`：任务、幂等键、事件、租约和终态持久化。
+- `app/task_runtime/notifying_store.py`：数据库提交后的 best-effort 通知装饰器。
+- `app/infrastructure/notifications/`：进程内 Worker/SSE/取消唤醒协调器和 NoOp 降级实现。
+- `app/infrastructure/redis/task_notifications.py`：Redis Pub/Sub 发布、单订阅线程和自动重连。
 - `app/task_runtime/worker.py`：后台领取、心跳、恢复、取消和失败报告。
 - `app/task_runtime/context.py`：通过 `ContextVar` 把取消和租约检查注入同步 Orchestrator。
 - `app/task_runtime/progress.py`：业务阶段名称与单调进度映射。
@@ -102,6 +109,10 @@ TRIP_TASK_HEARTBEAT_SECONDS=5
 TRIP_TASK_SHUTDOWN_TIMEOUT_SECONDS=3
 TRIP_TASK_SSE_POLL_SECONDS=0.5
 TRIP_TASK_SSE_HEARTBEAT_SECONDS=15
+REDIS_TASK_NOTIFICATIONS_ENABLED=true
+REDIS_TASK_NOTIFICATION_RECONNECT_SECONDS=1
+TRIP_TASK_NOTIFICATION_WORKER_FALLBACK_POLL_SECONDS=5
+TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS=5
 ```
 
 生产环境应保证 `TRIP_TASK_LEASE_SECONDS` 明显大于心跳间隔和预期数据库短暂阻塞时间。
@@ -112,3 +123,25 @@ TRIP_TASK_SSE_HEARTBEAT_SECONDS=15
 - 会话查询、恢复、execution-view 继续使用原 `session_id`。
 - 第四阶段 TripDraft、重新评估和 TripPlanVersion 路由、存储与服务保持不变。
 - 前端成功后使用任务返回的 `result_session_id` 自动跳转 `/result/:sessionId`。
+
+
+## 9. Redis 通知与数据库兜底
+
+通知链路遵循“**先提交数据库，再发布 Redis**”：
+
+1. 创建任务成功后发布 `task_available`，跨进程唤醒 Worker；
+2. `claim_next`、进度和终态事件写库成功后发布 `task_event`，SSE 被唤醒后仍按 `event_id` 查询数据库；
+3. 取消标记写库成功后发布 `cancellation`，执行上下文优先检查本地取消信号，然后继续保留数据库检查；
+4. Redis 消息重复不会重复展示事件，因为浏览器输出只来自数据库中严格大于游标的事件；
+5. Redis 发布失败、订阅断线或消息丢失时，Worker 和 SSE 等待超时后自动查询 MySQL/SQLite；
+6. Redis 不保存唯一任务状态，不参与 Worker 租约互斥，也不替代 AgentState 检查点。
+
+应用只建立一个 Redis Pub/Sub 订阅线程，再把消息转换为进程内 `Condition`，不会为每个 SSE 连接创建一条 Redis 长连接。
+
+`GET /api/health` 的 `components.redis_notifications` 提供订阅状态和以下指标：
+
+- 发布、接收和发布降级次数；
+- Worker 通知唤醒与数据库兜底超时；
+- SSE 通知唤醒与数据库兜底超时；
+- 取消快速路径命中和数据库取消检查次数；
+- 非法消息和订阅重连次数。

@@ -26,7 +26,11 @@ from app.evaluation import (
     FixedAcceptanceBaselineReport,
 )
 from app.infrastructure.cache import CacheConfig, create_cache_store
-from app.infrastructure.redis import RedisClientManager, RedisConfig
+from app.infrastructure.redis import (
+    RedisClientManager,
+    RedisConfig,
+    create_task_notification_bus,
+)
 from app.providers.amap.layered_cache import (
     LayeredRestaurantCache,
     LayeredRouteCache,
@@ -62,6 +66,7 @@ from app.task_runtime import (
     TripTaskCancelResponse,
     TripTaskCreateResponse,
 )
+from app.task_runtime.notifying_store import NotifyingTripTaskStore
 from app.task_runtime.worker import TripTaskWorker, WorkerSettings
 from app.tools import ToolDescriptor, build_trip_tool_registry
 from app.tools.unsplash_tools import get_place_photo
@@ -75,11 +80,19 @@ cache_store = create_cache_store(
     cache_config=CacheConfig.from_settings(settings),
     redis_client_manager=redis_client_manager,
 )
+# Redis Pub/Sub 仅发送可丢失唤醒；真正的任务、事件和取消状态仍写入数据库。
+task_notification_bus = create_task_notification_bus(
+    client_manager=redis_client_manager,
+    enabled=settings.REDIS_TASK_NOTIFICATIONS_ENABLED,
+    reconnect_delay_seconds=settings.REDIS_TASK_NOTIFICATION_RECONNECT_SECONDS,
+)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """应用启动时恢复持久化任务队列，关闭时停止领取新任务。"""
 
+    # 先启动订阅器，再启动 Worker，避免服务启动窗口内错过新任务通知。
+    task_notification_bus.start()
     if settings.TRIP_TASK_WORKER_ENABLED:
         trip_task_worker.start()
     try:
@@ -87,6 +100,7 @@ async def lifespan(_: FastAPI):
     finally:
         if settings.TRIP_TASK_WORKER_ENABLED:
             trip_task_worker.stop()
+        task_notification_bus.stop()
         # Redis 属于可选加速层，关闭失败不能阻塞应用退出。
         redis_client_manager.close()
 
@@ -282,13 +296,22 @@ trip_draft_service = TripDraftService(
 
 
 # 阶段五：任务元数据与 SSE 事件使用同一持久化后端，独立于 AgentState 检查点。
-trip_task_store = persistence_stores.trip_task_store
+# 通知装饰器只在数据库事务提交成功后发布 Redis 消息，发布失败不会覆盖写库结果。
+trip_task_store = NotifyingTripTaskStore(
+    delegate=persistence_stores.trip_task_store,
+    notification_bus=task_notification_bus,
+)
 trip_task_worker = TripTaskWorker(
     task_store=trip_task_store,
     state_store=agent_state_store,
     orchestrator=trip_orchestrator,
+    notification_bus=task_notification_bus,
     settings=WorkerSettings(
-        poll_interval_seconds=settings.TRIP_TASK_WORKER_POLL_SECONDS,
+        poll_interval_seconds=(
+            settings.TRIP_TASK_NOTIFICATION_WORKER_FALLBACK_POLL_SECONDS
+            if task_notification_bus.enabled
+            else settings.TRIP_TASK_WORKER_POLL_SECONDS
+        ),
         lease_seconds=settings.TRIP_TASK_LEASE_SECONDS,
         heartbeat_interval_seconds=settings.TRIP_TASK_HEARTBEAT_SECONDS,
         shutdown_timeout_seconds=settings.TRIP_TASK_SHUTDOWN_TIMEOUT_SECONDS,
@@ -455,6 +478,8 @@ async def stream_trip_task_events(
         while True:
             if await request.is_disconnected():
                 return
+            # 查询数据库前保存通知游标，避免事件恰好写入时进入无谓等待。
+            notification_cursor = task_notification_bus.task_cursor(task_id)
             events = await run_in_threadpool(
                 trip_task_store.list_events,
                 task_id,
@@ -480,7 +505,25 @@ async def stream_trip_task_events(
             if now - last_heartbeat >= settings.TRIP_TASK_SSE_HEARTBEAT_SECONDS:
                 yield ": heartbeat\n\n"
                 last_heartbeat = now
-            await asyncio.sleep(max(0.05, settings.TRIP_TASK_SSE_POLL_SECONDS))
+
+            # Redis 消息只负责提前结束等待；醒来后仍从数据库按 event_id 回放，
+            # 因而重复消息不会重复展示，断线重连仍沿用 Last-Event-ID。
+            fallback_poll_seconds = (
+                settings.TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS
+                if task_notification_bus.enabled
+                else settings.TRIP_TASK_SSE_POLL_SECONDS
+            )
+            heartbeat_remaining = max(
+                0.05,
+                settings.TRIP_TASK_SSE_HEARTBEAT_SECONDS
+                - (asyncio.get_running_loop().time() - last_heartbeat),
+            )
+            await run_in_threadpool(
+                task_notification_bus.wait_for_task,
+                task_id,
+                notification_cursor,
+                min(max(0.05, fallback_poll_seconds), heartbeat_remaining),
+            )
 
     return StreamingResponse(
         event_generator(),
@@ -812,13 +855,15 @@ def resume_trip_session(session_id: str):
 def health_check():
     # Redis 是非关键组件：不可用时报告 degraded，但主服务继续通过健康检查。
     redis_health = redis_client_manager.check_health()
+    notification_health = task_notification_bus.health_snapshot()
     cache_metrics = cache_store.metrics_snapshot()
     return {
         "status": "ok",
         "message": "旅行助手服务运行正常",
-        "degraded": redis_health.degraded,
+        "degraded": redis_health.degraded or notification_health.degraded,
         "components": {
             "redis": redis_health.model_dump(),
+            "redis_notifications": notification_health.model_dump(),
             "cache": {
                 "backend": cache_store.backend_name,
                 "enabled": cache_store.enabled,

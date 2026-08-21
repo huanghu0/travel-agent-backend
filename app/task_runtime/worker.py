@@ -16,6 +16,10 @@ from app.agent_runtime import (
     AgentState,
     TripOrchestrator,
 )
+from app.infrastructure.notifications import (
+    NoOpTaskNotificationBus,
+    TaskNotificationBus,
+)
 from app.persistence.exceptions import SessionNotFoundError, TaskLeaseLostError
 from app.persistence.interfaces import AgentStateStore, TripTaskStore
 from app.task_runtime.context import (
@@ -51,14 +55,15 @@ class TripTaskWorker:
         orchestrator: TripOrchestrator,
         settings: WorkerSettings | None = None,
         worker_id: str | None = None,
+        notification_bus: TaskNotificationBus | None = None,
     ):
         self.task_store = task_store
         self.state_store = state_store
         self.orchestrator = orchestrator
         self.settings = settings or WorkerSettings()
         self.worker_id = worker_id or f"worker-{uuid4()}"
+        self.notification_bus = notification_bus or NoOpTaskNotificationBus()
         self._stop_event = threading.Event()
-        self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
@@ -73,7 +78,6 @@ class TripTaskWorker:
             if self.running:
                 return
             self._stop_event.clear()
-            self._wake_event.clear()
             self._thread = threading.Thread(
                 target=self._run_loop,
                 name=self.worker_id,
@@ -89,14 +93,16 @@ class TripTaskWorker:
             if thread is None:
                 return
             self._stop_event.set()
-            self._wake_event.set()
+            self.notification_bus.wake_worker_local()
         thread.join(timeout=max(0.1, self.settings.shutdown_timeout_seconds))
         with self._lock:
             if not thread.is_alive():
                 self._thread = None
 
     def wake(self) -> None:
-        self._wake_event.set()
+        """兼容进程内调用；跨进程新任务由 Redis Pub/Sub 唤醒。"""
+
+        self.notification_bus.wake_worker_local()
 
     def run_once(self) -> bool:
         """测试和运维可调用的一次领取执行；返回是否实际领取了任务。"""
@@ -112,16 +118,22 @@ class TripTaskWorker:
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
+            # 在查询数据库前记录通知游标，避免“刚查完数据库、准备等待”时丢失唤醒。
+            notification_cursor = self.notification_bus.worker_cursor()
             try:
                 executed = self.run_once()
             except Exception:
-                # 单个任务或暂时 SQLite 错误不能杀死整个 Worker；下一轮继续恢复。
+                # 单个任务或暂时数据库错误不能杀死整个 Worker；下一轮继续恢复。
                 logger.exception("异步旅行规划 Worker 循环执行失败")
                 executed = False
-            if executed:
+            if executed or self._stop_event.is_set():
                 continue
-            self._wake_event.wait(timeout=max(0.05, self.settings.poll_interval_seconds))
-            self._wake_event.clear()
+            # Redis 正常时通常由消息立即唤醒；消息丢失或 Redis 故障时，
+            # 等待超时后仍会回到 claim_next 查询 MySQL/SQLite。
+            self.notification_bus.wait_for_worker(
+                notification_cursor,
+                max(0.05, self.settings.poll_interval_seconds),
+            )
 
     def _execute_task(self, task: TripPlanningTask) -> None:
         heartbeat_stop = threading.Event()
@@ -136,6 +148,7 @@ class TripTaskWorker:
             task_id=task.task_id,
             worker_id=self.worker_id,
             store=self.task_store,
+            notification_bus=self.notification_bus,
         )
         try:
             with bind_task_context(context):

@@ -9,6 +9,10 @@ from app.infrastructure.redis.client import (
 from app.infrastructure.redis.cache_store import RedisCacheStore
 from app.infrastructure.redis.config import RedisConfig
 from app.infrastructure.redis.keys import RedisKeyBuilder
+from app.infrastructure.redis.task_notifications import (
+    RedisTaskNotificationBus,
+    create_task_notification_bus,
+)
 
 __all__ = [
     "RedisClientManager",
@@ -17,5 +21,7 @@ __all__ = [
     "RedisHealthStatus",
     "RedisKeyBuilder",
     "RedisCacheStore",
+    "RedisTaskNotificationBus",
     "create_redis_client",
+    "create_task_notification_bus",
 ]

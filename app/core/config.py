@@ -138,6 +138,13 @@ class Settings:
     REDIS_DEGRADE_COOLDOWN_SECONDS: float = float(
         _env("REDIS_DEGRADE_COOLDOWN_SECONDS", "5") or "5"
     )
+    # Redis Pub/Sub 只负责异步任务唤醒；关闭或故障时继续依靠数据库轮询。
+    REDIS_TASK_NOTIFICATIONS_ENABLED: bool = _env_bool(
+        "REDIS_TASK_NOTIFICATIONS_ENABLED", True
+    )
+    REDIS_TASK_NOTIFICATION_RECONNECT_SECONDS: float = float(
+        _env("REDIS_TASK_NOTIFICATION_RECONNECT_SECONDS", "1") or "1"
+    )
 
     # AgentState 持久化检查点与有界确定性执行循环。
     AGENT_MEMORY_DB_PATH: str = _env(
@@ -360,6 +367,13 @@ class Settings:
     )
     TRIP_TASK_SSE_HEARTBEAT_SECONDS: float = float(
         _env("TRIP_TASK_SSE_HEARTBEAT_SECONDS", "15") or "15"
+    )
+    # Redis 通知启用后可降低 MySQL 空轮询频率；通知丢失时最多等待该时长恢复。
+    TRIP_TASK_NOTIFICATION_WORKER_FALLBACK_POLL_SECONDS: float = float(
+        _env("TRIP_TASK_NOTIFICATION_WORKER_FALLBACK_POLL_SECONDS", "5") or "5"
+    )
+    TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS: float = float(
+        _env("TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS", "5") or "5"
     )
 
     # 高德 HTTP 超时配置：连接超时与读取超时。

@@ -7,6 +7,7 @@ from app.task_runtime.context import (
     raise_if_task_cancelled,
     raise_if_task_lease_lost,
 )
+from app.task_runtime.notifying_store import NotifyingTripTaskStore
 from app.task_runtime.models import (
     TaskFailureReport,
     TripPlanningTask,
@@ -22,6 +23,7 @@ from app.task_runtime.store import (
 )
 
 __all__ = [
+    "NotifyingTripTaskStore",
     "SQLiteTripTaskStore",
     "TaskCancellationRequested",
     "TaskExecutionContext",
