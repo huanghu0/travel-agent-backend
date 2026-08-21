@@ -44,8 +44,8 @@ class ExecutionBudget(BaseModel):
     """单个智能体会话需要持久化的生命周期预算。"""
 
     max_steps: int = Field(default=24, ge=1)
-    max_duration_seconds: float = Field(default=180.0, gt=0)
-    max_tool_calls: int = Field(default=15, ge=0)
+    max_duration_seconds: float = Field(default=600.0, gt=0)
+    max_tool_calls: int = Field(default=30, ge=0)
     max_llm_calls: int = Field(default=6, ge=0)
     max_repair_attempts: int = Field(default=2, ge=0)
     max_route_optimization_attempts: int = Field(default=1, ge=0)
@@ -493,8 +493,8 @@ class AgentState(BaseModel):
         partial_acceptance_max_constraint_errors: int = 0,
         partial_acceptance_min_attractions_per_day: int = 0,
         partial_acceptance_allowed_error_codes: list[str] | None = None,
-        max_duration_seconds: float = 180.0,
-        max_tool_calls: int = 15,
+        max_duration_seconds: float = 600.0,
+        max_tool_calls: int = 30,
         max_llm_calls: int = 6,
         execution_budget: ExecutionBudget | None = None,
         session_id: str | None = None,

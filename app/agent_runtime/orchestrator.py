@@ -219,8 +219,8 @@ class TripOrchestrator:
             DEFAULT_ALLOWED_PARTIAL_ERROR_CODES
         ),
         partial_acceptance_policy: PartialAcceptancePolicy | None = None,
-        max_duration_seconds: float = 180.0,
-        max_tool_calls: int = 15,
+        max_duration_seconds: float = 600.0,
+        max_tool_calls: int = 30,
         max_llm_calls: int = 6,
         retry_base_delay_seconds: float = 0.5,
         retry_max_delay_seconds: float = 8.0,

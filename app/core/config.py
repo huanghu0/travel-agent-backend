@@ -374,10 +374,10 @@ class Settings:
     )
 
     AGENT_MAX_DURATION_SECONDS: float = float(
-        _env("AGENT_MAX_DURATION_SECONDS", "180") or "180"
+        _env("AGENT_MAX_DURATION_SECONDS", "600") or "600"
     )
     AGENT_MAX_TOOL_CALLS: int = int(
-        _env("AGENT_MAX_TOOL_CALLS", "15") or "15"
+        _env("AGENT_MAX_TOOL_CALLS", "30") or "30"
     )
     AGENT_MAX_LLM_CALLS: int = int(
         _env("AGENT_MAX_LLM_CALLS", "6") or "6"

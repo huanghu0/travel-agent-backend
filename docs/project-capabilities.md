@@ -420,6 +420,7 @@ Redis 阶段一至第三阶段业务增强已完成：
 
 - 新环境从 `.env.example` 复制配置，但不要提交真实 `.env`。
 - 当前复杂行程建议 `AGENT_MAX_STEPS=40`；若本地 `.env` 仍为 24，需要显式更新并重启服务。
+- 3～5 日且包含路线重算、餐饮回填和自动修复的行程建议至少使用 `AGENT_MAX_DURATION_SECONDS=600`、`AGENT_MAX_TOOL_CALLS=30`；15 次工具预算只适合较短、无需多轮优化的行程。
 - 调高步骤上限时同步检查 `AGENT_MAX_DURATION_SECONDS`、`AGENT_MAX_TOOL_CALLS` 和 `AGENT_MAX_LLM_CALLS`，否则可能先触发其他预算。
 - `AGENT_MAX_REPEATED_ACTION_INPUTS=1`：同一收敛窗口内，相同动作和业务输入最多成功执行一次。
 - `AGENT_MAX_NO_PROGRESS_STEPS=3`：连续三个成功动作没有改变核心业务状态时提前终止，避免耗尽全部步骤。
