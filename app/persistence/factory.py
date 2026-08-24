@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Engine
 
@@ -17,6 +18,9 @@ from app.persistence.interfaces import (
     TripVersionStore,
 )
 
+if TYPE_CHECKING:
+    from app.auth.service import UserStore
+
 
 @dataclass(frozen=True, slots=True)
 class PersistenceStores:
@@ -27,6 +31,7 @@ class PersistenceStores:
     trip_task_store: TripTaskStore
     route_cache: RouteCacheStore | None
     restaurant_cache: RestaurantCacheStore | None
+    user_store: UserStore | None = None
 
 
 def create_persistence_stores(
@@ -58,6 +63,7 @@ def create_persistence_stores(
             restaurant_cache=(
                 SQLiteRestaurantCache(database_path) if restaurant_cache_enabled else None
             ),
+            user_store=None,
         )
 
     if normalized_backend == "mysql":
@@ -66,6 +72,7 @@ def create_persistence_stores(
         from app.persistence.mysql_route_cache import MySQLRouteCache
         from app.persistence.mysql_trip_task_store import MySQLTripTaskStore
         from app.persistence.mysql_trip_version_store import MySQLTripVersionStore
+        from app.auth.store import MySQLUserStore
 
         engine = mysql_engine
         if engine is None:
@@ -80,6 +87,7 @@ def create_persistence_stores(
             restaurant_cache=(
                 MySQLRestaurantCache(engine) if restaurant_cache_enabled else None
             ),
+            user_store=MySQLUserStore(engine),
         )
 
     raise UnsupportedDatabaseBackendError(

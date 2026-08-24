@@ -26,6 +26,7 @@ from app.persistence.sqlalchemy_models import (
     TripPlanningTaskRow,
     TripPlanVersionRow,
     TripTaskEventRow,
+    UserRow,
 )
 from app.providers.amap.models import (
     GeoPoint,
@@ -156,6 +157,7 @@ class MySQLStoreIntegrationTests(unittest.TestCase):
                 RestaurantCacheRow.__table__,
                 RouteCacheRow.__table__,
                 AgentSessionRow.__table__,
+                UserRow.__table__,
             ):
                 connection.execute(delete(table))
 

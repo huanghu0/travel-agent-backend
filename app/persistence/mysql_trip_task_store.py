@@ -152,12 +152,16 @@ class MySQLTripTaskStore(MySQLStoreBase, TripTaskStore):
         *,
         key: str,
         fingerprint: str,
+        user_id: str | None,
         lock_rows: bool,
     ) -> TripPlanningTask | None:
         key_statement = select(
             self.task_table.c.task_json,
             self.task_table.c.request_fingerprint,
-        ).where(self.task_table.c.idempotency_key == key)
+        ).where(
+            self.task_table.c.idempotency_key == key,
+            self.task_table.c.user_id == user_id,
+        )
         if lock_rows:
             key_statement = key_statement.with_for_update()
         existing = connection.execute(key_statement).mappings().one_or_none()
@@ -172,6 +176,7 @@ class MySQLTripTaskStore(MySQLStoreBase, TripTaskStore):
             select(self.task_table.c.task_json)
             .where(
                 self.task_table.c.request_fingerprint == fingerprint,
+                self.task_table.c.user_id == user_id,
                 self.task_table.c.status.in_(self.ACTIVE_STATUSES),
             )
             .order_by(self.task_table.c.created_at.desc())
@@ -187,6 +192,7 @@ class MySQLTripTaskStore(MySQLStoreBase, TripTaskStore):
         request: TripRequest,
         *,
         idempotency_key: str,
+        user_id: str | None = None,
     ) -> tuple[TripPlanningTask, bool]:
         key = self._normalize_idempotency_key(idempotency_key)
         fingerprint = self.request_fingerprint(request)
@@ -196,6 +202,7 @@ class MySQLTripTaskStore(MySQLStoreBase, TripTaskStore):
                     connection,
                     key=key,
                     fingerprint=fingerprint,
+                    user_id=user_id,
                     lock_rows=True,
                 )
                 if existing is not None:
@@ -207,10 +214,12 @@ class MySQLTripTaskStore(MySQLStoreBase, TripTaskStore):
                     idempotency_key=key,
                     request_fingerprint=fingerprint,
                     request=request,
+                    user_id=user_id,
                 )
                 connection.execute(
                     self.task_table.insert().values(
                         task_id=task.task_id,
+                        user_id=task.user_id,
                         session_id=task.session_id,
                         idempotency_key=task.idempotency_key,
                         request_fingerprint=task.request_fingerprint,
@@ -233,16 +242,22 @@ class MySQLTripTaskStore(MySQLStoreBase, TripTaskStore):
                     connection,
                     key=key,
                     fingerprint=fingerprint,
+                    user_id=user_id,
                     lock_rows=False,
                 )
             if existing is not None:
                 return existing, True
             raise
 
-    def get_task(self, task_id: str) -> TripPlanningTask:
+    def get_task(
+        self, task_id: str, *, user_id: str | None = None
+    ) -> TripPlanningTask:
+        filters = [self.task_table.c.task_id == task_id]
+        if user_id is not None:
+            filters.append(self.task_table.c.user_id == user_id)
         with self.engine.connect() as connection:
             payload = connection.execute(
-                select(self.task_table.c.task_json).where(self.task_table.c.task_id == task_id)
+                select(self.task_table.c.task_json).where(*filters)
             ).scalar_one_or_none()
         if payload is None:
             raise TripTaskNotFoundError(f"未找到异步旅行规划任务: {task_id}")
@@ -408,11 +423,16 @@ class MySQLTripTaskStore(MySQLStoreBase, TripTaskStore):
             raise TripTaskNotFoundError(task_id)
         return bool(row["cancel_requested"]) or row["status"] == "cancelled"
 
-    def request_cancel(self, task_id: str) -> TripPlanningTask:
+    def request_cancel(
+        self, task_id: str, *, user_id: str | None = None
+    ) -> TripPlanningTask:
+        filters = [self.task_table.c.task_id == task_id]
+        if user_id is not None:
+            filters.append(self.task_table.c.user_id == user_id)
         with self.engine.begin() as connection:
             payload = connection.execute(
                 select(self.task_table.c.task_json)
-                .where(self.task_table.c.task_id == task_id)
+                .where(*filters)
                 .with_for_update()
             ).scalar_one_or_none()
             if payload is None:

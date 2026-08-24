@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from app.agent_runtime.acceptance import (
     DEFAULT_ALLOWED_PARTIAL_ERROR_CODES,
@@ -313,9 +313,12 @@ class ContentRefillRecord(BaseModel):
 class AgentState(BaseModel):
     """一次旅行规划的完整可变状态；该对象会整体写入 SQLite 检查点。"""
 
+    _checkpoint_persisted: bool = PrivateAttr(default=False)
+
     # 会话身份、生命周期和循环边界。
     state_version: int = CURRENT_AGENT_STATE_VERSION
     session_id: str = Field(default_factory=lambda: str(uuid4()))
+    user_id: str | None = None
     request: TripRequest
     status: AgentStatus = "pending"
     current_step: int = 0
@@ -498,6 +501,7 @@ class AgentState(BaseModel):
         max_llm_calls: int = 6,
         execution_budget: ExecutionBudget | None = None,
         session_id: str | None = None,
+        user_id: str | None = None,
     ) -> "AgentState":
         if execution_budget is None:
             execution_budget = ExecutionBudget(
@@ -556,6 +560,8 @@ class AgentState(BaseModel):
         }
         if session_id is not None:
             values["session_id"] = session_id
+        if user_id is not None:
+            values["user_id"] = user_id
         return cls(**values)
 
     def next_attempt(self, action: AgentAction) -> int:
@@ -586,3 +592,12 @@ class AgentState(BaseModel):
 
         self.updated_at = utc_now()
         self.refresh_duration(now=self.updated_at)
+
+    @property
+    def checkpoint_persisted(self) -> bool:
+        return self._checkpoint_persisted
+
+    def mark_checkpoint_persisted(self) -> None:
+        """标记首次检查点已提交；该运行时标记不会写入状态 JSON。"""
+
+        self._checkpoint_persisted = True

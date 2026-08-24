@@ -247,9 +247,10 @@ class TripPlanConsistencyRebuilder:
     @staticmethod
     def _accommodation_description(request: TripRequest, hotel: Hotel | None) -> str:
         if hotel is None:
-            return f"\u5f53\u65e5\u672a\u7ed1\u5b9a\u5177\u4f53\u9152\u5e97\uff0c\u6309\u201c{request.accommodation}\u201d\u504f\u597d\u81ea\u884c\u786e\u8ba4\u4f4f\u5bbf\u6216\u8fd4\u7a0b\u3002"
-        cost = f"\uff0c\u9884\u8ba1{hotel.estimated_cost}\u5143/\u665a" if hotel.estimated_cost > 0 else ""
-        return f"\u5165\u4f4f{hotel.name}\uff08{hotel.address or '\u5730\u5740\u4ee5\u9884\u8ba2\u4fe1\u606f\u4e3a\u51c6'}{cost}\uff09\u3002"
+            return f"当日未绑定具体酒店，按“{request.accommodation}”偏好自行确认住宿或返程。"
+        cost = f"，预计{hotel.estimated_cost}元/晚" if hotel.estimated_cost > 0 else ""
+        address = hotel.address or "地址以预订信息为准"
+        return f"入住{hotel.name}（{address}{cost}）。"
 
     def _build_meals(
         self,

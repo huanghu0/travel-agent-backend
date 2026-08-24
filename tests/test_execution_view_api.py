@@ -11,6 +11,11 @@ from app.memory import SQLiteAgentStateStore
 from app.routing.quality import RouteQualityReport
 from app.schemas.trip_schema import TripPlan, TripRequest
 from app.scheduling.models import DayScheduleQuality, ScheduleQualityReport, TimelineItem
+from tests.auth_test_helpers import (
+    TEST_USER,
+    install_main_auth_override,
+    remove_main_auth_override,
+)
 
 
 class ExecutionViewApiTests(unittest.TestCase):
@@ -71,7 +76,11 @@ class ExecutionViewApiTests(unittest.TestCase):
                 "overall_suggestions": "错峰出行",
             }
         )
-        state = AgentState.create(request, session_id="execution-view-session")
+        state = AgentState.create(
+            request,
+            session_id="execution-view-session",
+            user_id=TEST_USER.user_id,
+        )
         state.status = "completed"
         state.finished = True
         state.current_step = 8
@@ -179,11 +188,13 @@ class ExecutionViewApiTests(unittest.TestCase):
         self.store.save_state(state)
         original_store = main.agent_state_store
         main.agent_state_store = self.store
+        install_main_auth_override(main)
         try:
             response = TestClient(main.app).get(
                 "/api/trip/sessions/execution-view-session/execution-view"
             )
         finally:
+            remove_main_auth_override(main)
             main.agent_state_store = original_store
 
         self.assertEqual(response.status_code, 200)
@@ -223,10 +234,12 @@ class ExecutionViewApiTests(unittest.TestCase):
                 preferences=[],
             ),
             session_id="empty-execution-view",
+            user_id=TEST_USER.user_id,
         )
         self.store.save_state(state)
         original_store = main.agent_state_store
         main.agent_state_store = self.store
+        install_main_auth_override(main)
         try:
             client = TestClient(main.app)
             response = client.get(
@@ -234,6 +247,7 @@ class ExecutionViewApiTests(unittest.TestCase):
             )
             missing = client.get("/api/trip/sessions/missing/execution-view")
         finally:
+            remove_main_auth_override(main)
             main.agent_state_store = original_store
 
         self.assertEqual(response.status_code, 200)

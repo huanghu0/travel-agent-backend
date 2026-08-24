@@ -41,10 +41,12 @@ class NotifyingTripTaskStore:
         request: TripRequest,
         *,
         idempotency_key: str,
+        user_id: str | None = None,
     ) -> tuple[TripPlanningTask, bool]:
         task, reused = self.delegate.create_task(
             request,
             idempotency_key=idempotency_key,
+            user_id=user_id,
         )
         self._cache_task(task)
         if not reused:
@@ -54,13 +56,17 @@ class NotifyingTripTaskStore:
             )
         return task, reused
 
-    def get_task(self, task_id: str) -> TripPlanningTask:
+    def get_task(
+        self, task_id: str, *, user_id: str | None = None
+    ) -> TripPlanningTask:
         # 前端轮询优先读取 Redis 快照；未命中/损坏/降级时回到数据库事实源。
         if self.snapshot_cache is not None:
-            cached = self.snapshot_cache.get_task_progress(task_id, TripPlanningTask)
+            cached = self.snapshot_cache.get_task_progress(
+                task_id, TripPlanningTask, user_id=user_id
+            )
             if cached is not None:
                 return cached
-        task = self.delegate.get_task(task_id)
+        task = self.delegate.get_task(task_id, user_id=user_id)
         self._cache_task(task)
         return task
 
@@ -145,8 +151,10 @@ class NotifyingTripTaskStore:
     def is_cancel_requested(self, task_id: str) -> bool:
         return self.delegate.is_cancel_requested(task_id)
 
-    def request_cancel(self, task_id: str) -> TripPlanningTask:
-        task = self.delegate.request_cancel(task_id)
+    def request_cancel(
+        self, task_id: str, *, user_id: str | None = None
+    ) -> TripPlanningTask:
+        task = self.delegate.request_cancel(task_id, user_id=user_id)
         self._cache_task(task)
         if task.cancel_requested:
             event_type = "task_cancelled" if task.terminal else "cancellation_requested"
@@ -210,6 +218,7 @@ class NotifyingTripTaskStore:
                 task.task_id,
                 task,
                 terminal=task.terminal,
+                user_id=task.user_id,
             )
 
     def _notify_event(self, task_id: str, event_type: str) -> None:

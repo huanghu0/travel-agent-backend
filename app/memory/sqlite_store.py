@@ -249,7 +249,7 @@ class SQLiteAgentStateStore(AgentStateStore):
                 ),
             )
 
-    def get_state(self, session_id: str) -> AgentState:
+    def get_state(self, session_id: str, *, user_id: str | None = None) -> AgentState:
         """加载并校验指定会话的最新检查点。"""
 
         # 步骤 1：按 session_id 读取最近一次完整 JSON 检查点。
@@ -261,13 +261,17 @@ class SQLiteAgentStateStore(AgentStateStore):
         if row is None:
             raise SessionNotFoundError(f"会话不存在: {session_id}")
         # 步骤 2：通过 Pydantic 恢复类型、枚举和嵌套模型，避免直接使用不可信 JSON。
-        return AgentState.model_validate_json(row["state_json"])
+        state = AgentState.model_validate_json(row["state_json"])
+        if user_id is not None and state.user_id != user_id:
+            raise SessionNotFoundError(f"会话不存在: {session_id}")
+        return state
 
     def list_sessions(
         self,
         *,
         limit: int = 50,
         status: AgentStatus | None = None,
+        user_id: str | None = None,
     ) -> list[AgentSessionSummary]:
         """不加载完整大状态对象，只查询最近会话摘要。"""
 
@@ -275,7 +279,7 @@ class SQLiteAgentStateStore(AgentStateStore):
         safe_limit = max(1, min(limit, 200))
         query = """
             SELECT session_id, status, city, current_step, max_steps,
-                   action_count, created_at, updated_at
+                   action_count, created_at, updated_at, state_json
             FROM agent_sessions
         """
         params: list[object] = []
@@ -287,7 +291,18 @@ class SQLiteAgentStateStore(AgentStateStore):
 
         with self._connection() as connection:
             rows = connection.execute(query, params).fetchall()
-        return [AgentSessionSummary.model_validate(dict(row)) for row in rows]
+        summaries: list[AgentSessionSummary] = []
+        for row in rows:
+            payload = dict(row)
+            state_json = payload.pop("state_json")
+            if user_id is not None:
+                try:
+                    if AgentState.model_validate_json(state_json).user_id != user_id:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            summaries.append(AgentSessionSummary.model_validate(payload))
+        return summaries
 
     def get_execution_baseline(
         self,
@@ -297,6 +312,7 @@ class SQLiteAgentStateStore(AgentStateStore):
         city: str | None = None,
         top_n: int = 20,
         max_cycle_span: int = 12,
+        user_id: str | None = None,
     ) -> ExecutionBaselineReport:
         """从最近会话检查点统计完成率、动作跳转和常见循环。"""
 
@@ -338,9 +354,14 @@ class SQLiteAgentStateStore(AgentStateStore):
         invalid_session_count = 0
         for row in rows:
             try:
-                states.append(AgentState.model_validate_json(row["state_json"]))
+                state = AgentState.model_validate_json(row["state_json"])
+                if user_id is None or state.user_id == user_id:
+                    states.append(state)
             except (TypeError, ValueError):
-                invalid_session_count += 1
+                if user_id is None:
+                    invalid_session_count += 1
+        if user_id is not None:
+            matching_session_count = len(states)
 
         # 步骤 4：在内存中聚合动作、跳转、循环以及城市完成率。
         return build_execution_baseline(
@@ -367,6 +388,7 @@ class SQLiteAgentStateStore(AgentStateStore):
         completion_mode: str | None = None,
         quality_level: str | None = None,
         top_n: int = 20,
+        user_id: str | None = None,
     ) -> QualityBaselineReport:
         """从 SQLite 最近会话统计交付质量、警告和资源消耗基线。"""
 
@@ -415,9 +437,14 @@ class SQLiteAgentStateStore(AgentStateStore):
         invalid_session_count = 0
         for row in rows:
             try:
-                states.append(AgentState.model_validate_json(row["state_json"]))
+                state = AgentState.model_validate_json(row["state_json"])
+                if user_id is None or state.user_id == user_id:
+                    states.append(state)
             except (TypeError, ValueError):
-                invalid_session_count += 1
+                if user_id is None:
+                    invalid_session_count += 1
+        if user_id is not None:
+            matching_session_count = len(states)
 
         # 步骤 3：统一在纯函数中聚合，便于单元测试和未来离线批处理复用。
         return build_quality_baseline(
@@ -439,6 +466,7 @@ class SQLiteAgentStateStore(AgentStateStore):
         self,
         *,
         limit: int = 5000,
+        user_id: str | None = None,
     ) -> FixedAcceptanceBaselineReport:
         """用 SQLite 最近会话覆盖固定 15 场景，并返回确定性验收报告。"""
 
@@ -458,13 +486,63 @@ class SQLiteAgentStateStore(AgentStateStore):
         invalid_session_count = 0
         for row in rows:
             try:
-                states.append(AgentState.model_validate_json(row["state_json"]))
+                state = AgentState.model_validate_json(row["state_json"])
+                if user_id is None or state.user_id == user_id:
+                    states.append(state)
             except (TypeError, ValueError):
-                invalid_session_count += 1
+                if user_id is None:
+                    invalid_session_count += 1
 
         return build_fixed_acceptance_baseline(
             states,
             requested_limit=safe_limit,
-            sampled_session_count=len(rows),
+            sampled_session_count=len(states),
             invalid_session_count=invalid_session_count,
         )
+    def create_state(self, state: AgentState) -> None:
+        """SQLite 仅保留兼容测试与迁移，创建仍沿用既有 UPSERT。"""
+
+        self.save_state(state)
+
+    def delete_session(self, session_id: str, *, user_id: str) -> list[str]:
+        """为测试和迁移工具保留与 MySQL 一致的级联删除接口。"""
+
+        self.get_state(session_id, user_id=user_id)
+        with self._connection() as connection:
+            tables = {
+                row["name"]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            task_ids: list[str] = []
+            if "trip_planning_tasks" in tables:
+                task_ids = [
+                    row["task_id"]
+                    for row in connection.execute(
+                        "SELECT task_id FROM trip_planning_tasks WHERE session_id = ?",
+                        (session_id,),
+                    ).fetchall()
+                ]
+                if task_ids and "trip_task_events" in tables:
+                    placeholders = ",".join("?" for _ in task_ids)
+                    connection.execute(
+                        f"DELETE FROM trip_task_events WHERE task_id IN ({placeholders})",
+                        task_ids,
+                    )
+                connection.execute(
+                    "DELETE FROM trip_planning_tasks WHERE session_id = ?",
+                    (session_id,),
+                )
+            if "trip_drafts" in tables:
+                connection.execute(
+                    "DELETE FROM trip_drafts WHERE session_id = ?", (session_id,)
+                )
+            if "trip_plan_versions" in tables:
+                connection.execute(
+                    "DELETE FROM trip_plan_versions WHERE session_id = ?", (session_id,)
+                )
+            connection.execute(
+                "DELETE FROM agent_sessions WHERE session_id = ?", (session_id,)
+            )
+        return task_ids

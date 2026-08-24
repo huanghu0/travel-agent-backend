@@ -8,6 +8,29 @@ jobs:
   deterministic-quality-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: test-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest-root-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DATABASE_BACKEND: mysql
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: travel_agent
+      MYSQL_TEST_DATABASE: travel_agent_test
+      MYSQL_USER: root
+      MYSQL_PASSWORD: test-root-password
+      JWT_SECRET_KEY: ci-only-jwt-secret-key-with-at-least-32-characters
+      GPT_LLM_API_KEY: ci-placeholder-key
+      RUN_MYSQL_INTEGRATION_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,6 +39,14 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
+      - name: Initialize MySQL databases
+        run: python scripts/init_mysql_databases.py
+      - name: Apply application schema
+        run: python -m alembic upgrade head
+      - name: Apply test schema
+        env:
+          MYSQL_DATABASE: travel_agent_test
+        run: python -m alembic upgrade head
       - name: Run deterministic quality gate
         run: python scripts/run_quality_gate.py
       - name: Upload Orchestrator fault reports

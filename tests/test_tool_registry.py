@@ -11,6 +11,7 @@ from app.tools import (
     ToolResultError,
     build_trip_tool_registry,
 )
+from tests.auth_test_helpers import install_main_auth_override, remove_main_auth_override
 
 
 class EchoInput(BaseModel):
@@ -378,7 +379,11 @@ class ToolRegistryTests(unittest.TestCase):
     def test_public_tool_endpoint_lists_only_registered_travel_tools(self):
         import main
 
-        response = TestClient(main.app).get("/api/agent/tools")
+        install_main_auth_override(main)
+        try:
+            response = TestClient(main.app).get("/api/agent/tools")
+        finally:
+            remove_main_auth_override(main)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(

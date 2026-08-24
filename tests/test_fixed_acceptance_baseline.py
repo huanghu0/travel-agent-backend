@@ -20,12 +20,21 @@ from app.memory import SQLiteAgentStateStore
 from app.routing import RouteQualityReport
 from app.scheduling import ScheduleQualityReport
 from app.schemas.trip_schema import Attraction, DayPlan, Location, TripPlan
+from tests.auth_test_helpers import (
+    TEST_USER,
+    install_main_auth_override,
+    remove_main_auth_override,
+)
 
 
 def make_completed_state(scenario_index: int = 0) -> AgentState:
     scenario = FIXED_ACCEPTANCE_SCENARIOS[scenario_index]
     request = scenario.request
-    state = AgentState.create(request, session_id=f"acceptance-{scenario.case_id}")
+    state = AgentState.create(
+        request,
+        session_id=f"acceptance-{scenario.case_id}",
+        user_id=TEST_USER.user_id,
+    )
     start_date = date.fromisoformat(request.start_date)
     days = []
     for day_index in range(request.travel_days):
@@ -154,6 +163,7 @@ class FixedAcceptanceBaselineTests(unittest.TestCase):
 
             original_store = main.agent_state_store
             main.agent_state_store = store
+            install_main_auth_override(main)
             try:
                 client = TestClient(main.app)
                 scenario_response = client.get(
@@ -163,6 +173,7 @@ class FixedAcceptanceBaselineTests(unittest.TestCase):
                     "/api/agent/analytics/fixed-acceptance-baseline"
                 )
             finally:
+                remove_main_auth_override(main)
                 main.agent_state_store = original_store
 
         self.assertEqual(scenario_response.status_code, 200)

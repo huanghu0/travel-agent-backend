@@ -31,22 +31,53 @@ class ReadModelSnapshotCache:
         self.task_active_ttl_seconds = task_active_ttl_seconds
         self.task_terminal_ttl_seconds = task_terminal_ttl_seconds
 
-    def get_execution_view(self, session_id: str, model_type: type[TModel]) -> TModel | None:
-        return self._get(self.key_builder.execution_view(session_id), model_type)
+    def get_execution_view(
+        self,
+        session_id: str,
+        model_type: type[TModel],
+        *,
+        user_id: str | None = None,
+    ) -> TModel | None:
+        return self._get(
+            self.key_builder.execution_view(session_id, user_id=user_id), model_type
+        )
 
-    def set_execution_view(self, session_id: str, value: BaseModel, *, active: bool) -> None:
+    def set_execution_view(
+        self,
+        session_id: str,
+        value: BaseModel,
+        *,
+        active: bool,
+        user_id: str | None = None,
+    ) -> None:
         ttl = min(self.execution_view_ttl_seconds, 5) if active else self.execution_view_ttl_seconds
-        self._set(self.key_builder.execution_view(session_id), value, ttl)
+        self._set(self.key_builder.execution_view(session_id, user_id=user_id), value, ttl)
 
-    def delete_execution_view(self, session_id: str) -> None:
-        self._delete(self.key_builder.execution_view(session_id))
+    def delete_execution_view(self, session_id: str, *, user_id: str | None = None) -> None:
+        self._delete(self.key_builder.execution_view(session_id, user_id=user_id))
 
-    def get_task_progress(self, task_id: str, model_type: type[TModel]) -> TModel | None:
-        return self._get(self.key_builder.task_progress(task_id), model_type)
+    def get_task_progress(
+        self,
+        task_id: str,
+        model_type: type[TModel],
+        *,
+        user_id: str | None = None,
+    ) -> TModel | None:
+        return self._get(self.key_builder.task_progress(task_id, user_id=user_id), model_type)
 
-    def set_task_progress(self, task_id: str, value: BaseModel, *, terminal: bool) -> None:
+    def set_task_progress(
+        self,
+        task_id: str,
+        value: BaseModel,
+        *,
+        terminal: bool,
+        user_id: str | None = None,
+    ) -> None:
         ttl = self.task_terminal_ttl_seconds if terminal else self.task_active_ttl_seconds
-        self._set(self.key_builder.task_progress(task_id), value, ttl)
+        self._set(self.key_builder.task_progress(task_id, user_id=user_id), value, ttl)
+
+    def delete_task_progress(self, task_id: str, *, user_id: str | None = None) -> None:
+        self._delete(self.key_builder.task_progress(task_id, user_id=user_id))
 
     def _get(self, key: str, model_type: type[TModel]) -> TModel | None:
         try:

@@ -46,15 +46,20 @@ class CacheStoreEntry(Generic[TCacheValue]):
 class AgentStateStore(Protocol):
     """AgentState 检查点、会话查询和质量基线存储接口。"""
 
+    def create_state(self, state: AgentState) -> None: ...
+
     def save_state(self, state: AgentState) -> None: ...
 
-    def get_state(self, session_id: str) -> AgentState: ...
+    def get_state(self, session_id: str, *, user_id: str | None = None) -> AgentState: ...
+
+    def delete_session(self, session_id: str, *, user_id: str) -> list[str]: ...
 
     def list_sessions(
         self,
         *,
         limit: int = 50,
         status: AgentStatus | None = None,
+        user_id: str | None = None,
     ) -> list[AgentSessionSummary]: ...
 
     def get_execution_baseline(
@@ -65,6 +70,7 @@ class AgentStateStore(Protocol):
         city: str | None = None,
         top_n: int = 20,
         max_cycle_span: int = 12,
+        user_id: str | None = None,
     ) -> ExecutionBaselineReport: ...
 
     def get_quality_baseline(
@@ -78,12 +84,14 @@ class AgentStateStore(Protocol):
         completion_mode: str | None = None,
         quality_level: str | None = None,
         top_n: int = 20,
+        user_id: str | None = None,
     ) -> QualityBaselineReport: ...
 
     def get_fixed_acceptance_baseline(
         self,
         *,
         limit: int = 5000,
+        user_id: str | None = None,
     ) -> FixedAcceptanceBaselineReport: ...
 
 
@@ -164,9 +172,12 @@ class TripTaskStore(Protocol):
         request: TripRequest,
         *,
         idempotency_key: str,
+        user_id: str | None = None,
     ) -> tuple[TripPlanningTask, bool]: ...
 
-    def get_task(self, task_id: str) -> TripPlanningTask: ...
+    def get_task(
+        self, task_id: str, *, user_id: str | None = None
+    ) -> TripPlanningTask: ...
 
     def list_events(
         self,
@@ -215,7 +226,9 @@ class TripTaskStore(Protocol):
 
     def is_cancel_requested(self, task_id: str) -> bool: ...
 
-    def request_cancel(self, task_id: str) -> TripPlanningTask: ...
+    def request_cancel(
+        self, task_id: str, *, user_id: str | None = None
+    ) -> TripPlanningTask: ...
 
     def mark_succeeded(
         self,

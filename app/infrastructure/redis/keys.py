@@ -98,8 +98,9 @@ class RedisKeyBuilder:
             self.fingerprint(payload),
         )
 
-    def execution_view(self, session_id: str) -> str:
-        return self.literal("snapshot", "execution-view", session_id)
+    def execution_view(self, session_id: str, *, user_id: str | None = None) -> str:
+        parts = (user_id, session_id) if user_id is not None else (session_id,)
+        return self.literal("snapshot", "execution-view", *parts)
 
     def quota(self, *, provider: str, policy: str, identity: str) -> str:
         """额度 Key 不包含 API Key、模型原文或用户输入。"""
@@ -111,8 +112,9 @@ class RedisKeyBuilder:
             self.fingerprint(identity),
         )
 
-    def task_progress(self, task_id: str) -> str:
-        return self.literal("task", "progress", task_id)
+    def task_progress(self, task_id: str, *, user_id: str | None = None) -> str:
+        parts = (user_id, task_id) if user_id is not None else (task_id,)
+        return self.literal("task", "progress", *parts)
 
     def task_notification_channel(self) -> str:
         """Worker 新任务通知频道；频道名只由可信环境前缀构成。"""

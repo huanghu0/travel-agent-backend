@@ -67,6 +67,7 @@ class TripPlanningTask(BaseModel):
 
     task_id: str
     session_id: str
+    user_id: str | None = None
     idempotency_key: str
     request_fingerprint: str
     request: TripRequest

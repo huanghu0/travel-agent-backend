@@ -3,11 +3,16 @@ import asyncio
 import json
 from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response, StreamingResponse
 
+from app.auth.dependencies import build_current_user_dependency
+from app.auth.models import User
+from app.auth.router import build_auth_router
+from app.auth.security import JwtCodec, PasswordSecurity
+from app.auth.service import AuthService
 from app.agent_runtime import (
     AgentActionError,
     AgentBudgetExceededError,
@@ -134,6 +139,7 @@ read_model_cache = ReadModelSnapshotCache(
 async def lifespan(_: FastAPI):
     """应用启动时恢复持久化任务队列，关闭时停止领取新任务。"""
 
+    settings.validate_auth_runtime()
     # 先启动订阅器，再启动 Worker，避免服务启动窗口内错过新任务通知。
     task_notification_bus.start()
     redis_observability.start()
@@ -179,6 +185,23 @@ persistence_stores = create_persistence_stores(
     route_cache_enabled=settings.AMAP_ROUTE_CACHE_ENABLED,
     restaurant_cache_enabled=settings.AMAP_RESTAURANT_CACHE_ENABLED,
 )
+auth_service: AuthService | None = None
+if persistence_stores.user_store is not None and settings.JWT_SECRET_KEY:
+    try:
+        auth_service = AuthService(
+            user_store=persistence_stores.user_store,
+            password_security=PasswordSecurity(),
+            jwt_codec=JwtCodec(
+                secret_key=settings.JWT_SECRET_KEY,
+                algorithm=settings.JWT_ALGORITHM,
+                expire_days=settings.JWT_EXPIRE_DAYS,
+            ),
+        )
+    except ValueError:
+        # lifespan 会给出统一且不包含密钥内容的配置错误。
+        auth_service = None
+current_user_dependency = build_current_user_dependency(auth_service)
+app.include_router(build_auth_router(auth_service, current_user_dependency))
 agent_state_store = persistence_stores.agent_state_store
 trip_version_store = persistence_stores.trip_version_store
 route_cache_l2 = persistence_stores.route_cache
@@ -453,7 +476,10 @@ def _max_steps_error_detail(exc: AgentMaxStepsError) -> str:
 
 # ==================== 路由接口 ====================
 @app.get("/api/poi/photo", summary="查询景点图片")
-def get_poi_photo(name: str):
+def get_poi_photo(
+    name: str,
+    _current_user: User = Depends(current_user_dependency),
+):
     """根据景点名称获取Unsplash图片。"""
     return get_place_photo(name)
 
@@ -463,7 +489,9 @@ def get_poi_photo(name: str):
     summary="查询智能体可用工具白名单",
     response_model=list[ToolDescriptor],
 )
-def list_agent_tools():
+def list_agent_tools(
+    _current_user: User = Depends(current_user_dependency),
+):
     """返回安全工具元数据，不包含处理器实现和密钥。"""
 
     return trip_tool_registry.describe()
@@ -478,12 +506,15 @@ def list_agent_tools():
 def create_trip_task(
     request: TripRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    current_user: User = Depends(current_user_dependency),
 ):
     """只持久化任务并唤醒 Worker，不在请求线程执行高德或 LLM。"""
 
     try:
         task, reused = trip_task_store.create_task(
-            request, idempotency_key=idempotency_key
+            request,
+            idempotency_key=idempotency_key,
+            user_id=current_user.user_id,
         )
         trip_task_worker.wake()
         return TripTaskCreateResponse(
@@ -504,11 +535,14 @@ def create_trip_task(
     summary="查询异步旅行规划任务",
     response_model=TripPlanningTask,
 )
-def get_trip_task(task_id: str):
+def get_trip_task(
+    task_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
     """页面刷新或断线恢复时，以该持久化快照为准。"""
 
     try:
-        return trip_task_store.get_task(task_id)
+        return trip_task_store.get_task(task_id, user_id=current_user.user_id)
     except TripTaskNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -518,11 +552,14 @@ def get_trip_task(task_id: str):
     summary="取消等待中或执行中的旅行规划任务",
     response_model=TripTaskCancelResponse,
 )
-def cancel_trip_task(task_id: str):
+def cancel_trip_task(
+    task_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
     """设置持久化取消标记；执行中的 Worker 会在下一安全检查点停止。"""
 
     try:
-        task = trip_task_store.request_cancel(task_id)
+        task = trip_task_store.request_cancel(task_id, user_id=current_user.user_id)
         trip_task_worker.wake()
         return TripTaskCancelResponse(
             task_id=task.task_id,
@@ -543,11 +580,12 @@ async def stream_trip_task_events(
     request: Request,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     after_event_id: int = Query(default=0, ge=0),
+    current_user: User = Depends(current_user_dependency),
 ):
     """按 SQLite 自增 event_id 回放事件，SSE 重连时不会重复发送旧事件。"""
 
     try:
-        trip_task_store.get_task(task_id)
+        trip_task_store.get_task(task_id, user_id=current_user.user_id)
     except TripTaskNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -583,7 +621,11 @@ async def stream_trip_task_events(
                     f"event: {event.event_type}\n"
                     f"data: {payload}\n\n"
                 )
-            task = await run_in_threadpool(trip_task_store.get_task, task_id)
+            task = await run_in_threadpool(
+                trip_task_store.get_task,
+                task_id,
+                user_id=current_user.user_id,
+            )
             if task.terminal:
                 return
             now = asyncio.get_running_loop().time()
@@ -622,13 +664,20 @@ async def stream_trip_task_events(
 
 
 @app.post("/api/trip/plan", summary="生成旅行计划", response_model=TripPlanResponse)
-async def generate_trip_plan(request: TripRequest):
+async def generate_trip_plan(
+    request: TripRequest,
+    current_user: User = Depends(current_user_dependency),
+):
     """
     使用确定性、有界循环生成旅行计划，并在每一步写入SQLite检查点。
     """
     try:
         # 步骤 1：在线程池中运行同步编排循环，避免高德和 LLM 的阻塞请求卡住 FastAPI 事件循环。
-        state = await run_in_threadpool(trip_orchestrator.run, request)
+        state = await run_in_threadpool(
+            trip_orchestrator.run,
+            request,
+            user_id=current_user.user_id,
+        )
 
         # 步骤 2：编排器完成后，把最终行程、会话 ID 和实际执行步数返回给前端。
         return TripPlanResponse(
@@ -686,6 +735,7 @@ def get_execution_baseline(
     city: str | None = Query(default=None, min_length=1, max_length=100),
     top_n: int = Query(default=20, ge=1, le=100),
     max_cycle_span: int = Query(default=12, ge=1, le=50),
+    current_user: User = Depends(current_user_dependency),
 ):
     """从 SQLite 最近会话统计完成率、动作次数、跳转路径和常见循环。"""
 
@@ -696,6 +746,7 @@ def get_execution_baseline(
         city=city,
         top_n=top_n,
         max_cycle_span=max_cycle_span,
+        user_id=current_user.user_id,
     )
 
 
@@ -716,6 +767,7 @@ def get_quality_baseline(
     ]
     | None = Query(default=None),
     top_n: int = Query(default=20, ge=1, le=100),
+    current_user: User = Depends(current_user_dependency),
 ):
     """统计完整/部分完成率、质量分、警告代码以及工具和 LLM 消耗。"""
 
@@ -729,6 +781,7 @@ def get_quality_baseline(
         completion_mode=completion_mode,
         quality_level=quality_level,
         top_n=top_n,
+        user_id=current_user.user_id,
     )
 
 
@@ -737,7 +790,9 @@ def get_quality_baseline(
     summary="查询固定端到端验收场景",
     response_model=list[AcceptanceScenario],
 )
-def list_fixed_acceptance_scenarios():
+def list_fixed_acceptance_scenarios(
+    _current_user: User = Depends(current_user_dependency),
+):
     """返回五城市、1/3/5 日和三类交通方式的固定请求清单。"""
 
     return FIXED_ACCEPTANCE_SCENARIOS
@@ -750,10 +805,14 @@ def list_fixed_acceptance_scenarios():
 )
 def get_fixed_acceptance_baseline(
     limit: int = Query(default=5000, ge=1, le=10000),
+    current_user: User = Depends(current_user_dependency),
 ):
     """用每个固定场景最近一次匹配会话执行离线确定性验收。"""
 
-    return agent_state_store.get_fixed_acceptance_baseline(limit=limit)
+    return agent_state_store.get_fixed_acceptance_baseline(
+        limit=limit,
+        user_id=current_user.user_id,
+    )
 
 
 @app.get(
@@ -764,10 +823,15 @@ def get_fixed_acceptance_baseline(
 def list_trip_sessions(
     limit: int = Query(default=50, ge=1, le=200),
     status: AgentStatus | None = Query(default=None),
+    current_user: User = Depends(current_user_dependency),
 ):
     """按最近更新时间倒序查询会话摘要。"""
 
-    return agent_state_store.list_sessions(limit=limit, status=status)
+    return agent_state_store.list_sessions(
+        limit=limit,
+        status=status,
+        user_id=current_user.user_id,
+    )
 
 
 @app.get(
@@ -775,12 +839,15 @@ def list_trip_sessions(
     summary="查询旅行规划会话详情",
     response_model=AgentState,
 )
-def get_trip_session(session_id: str):
+def get_trip_session(
+    session_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
     """读取完整状态、动作历史和错误记录，用于复盘。"""
 
     try:
         # 直接读取最近一次 SQLite 检查点，不会重新执行任何工具。
-        return agent_state_store.get_state(session_id)
+        return agent_state_store.get_state(session_id, user_id=current_user.user_id)
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -790,20 +857,28 @@ def get_trip_session(session_id: str):
     summary="查询面向结果页的轻量行程执行视图",
     response_model=TripExecutionView,
 )
-def get_trip_execution_view(session_id: str):
+def get_trip_execution_view(
+    session_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
     """仅返回行程展示、真实路线、时间轴和质量报告，不返回完整 AgentState。"""
 
-    cached = read_model_cache.get_execution_view(session_id, TripExecutionView)
+    cached = read_model_cache.get_execution_view(
+        session_id,
+        TripExecutionView,
+        user_id=current_user.user_id,
+    )
     if cached is not None:
         return cached
     try:
         # Redis 未命中时读取最近检查点并生成投影；数据库仍是事实来源。
-        state = agent_state_store.get_state(session_id)
+        state = agent_state_store.get_state(session_id, user_id=current_user.user_id)
         view = TripExecutionView.from_agent_state(state)
         read_model_cache.set_execution_view(
             session_id,
             view,
             active=state.status != "completed",
+            user_id=current_user.user_id,
         )
         return view
     except SessionNotFoundError as exc:
@@ -815,9 +890,14 @@ def get_trip_execution_view(session_id: str):
     summary="创建行程编辑草稿",
     response_model=TripDraft,
 )
-def create_trip_draft(session_id: str, payload: TripDraftCreate):
+def create_trip_draft(
+    session_id: str,
+    payload: TripDraftCreate,
+    current_user: User = Depends(current_user_dependency),
+):
     """以当前确认版本为基线创建草稿，不触发路线或 LLM 调用。"""
     try:
+        agent_state_store.get_state(session_id, user_id=current_user.user_id)
         return trip_draft_service.create_draft(session_id, payload)
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -830,10 +910,15 @@ def create_trip_draft(session_id: str, payload: TripDraftCreate):
     summary="查询行程草稿",
     response_model=TripDraft,
 )
-def get_trip_draft(session_id: str, draft_id: str):
+def get_trip_draft(
+    session_id: str,
+    draft_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
     try:
+        agent_state_store.get_state(session_id, user_id=current_user.user_id)
         return trip_version_store.get_draft(session_id, draft_id)
-    except DraftNotFoundError as exc:
+    except (SessionNotFoundError, DraftNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -842,9 +927,15 @@ def get_trip_draft(session_id: str, draft_id: str):
     summary="更新行程编辑草稿",
     response_model=TripDraft,
 )
-def update_trip_draft(session_id: str, draft_id: str, payload: TripDraftUpdate):
+def update_trip_draft(
+    session_id: str,
+    draft_id: str,
+    payload: TripDraftUpdate,
+    current_user: User = Depends(current_user_dependency),
+):
     """继续修改同一草稿；旧候选版本会被标记为 superseded。"""
     try:
+        agent_state_store.get_state(session_id, user_id=current_user.user_id)
         return trip_draft_service.update_draft(session_id, draft_id, payload)
     except (SessionNotFoundError, DraftNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -857,9 +948,14 @@ def update_trip_draft(session_id: str, draft_id: str, payload: TripDraftUpdate):
     summary="重新评估行程草稿",
     response_model=DraftEvaluationResponse,
 )
-def evaluate_trip_draft(session_id: str, draft_id: str):
+def evaluate_trip_draft(
+    session_id: str,
+    draft_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
     """只查询变化路线，然后重算时间轴、餐饮、约束与质量分。"""
     try:
+        agent_state_store.get_state(session_id, user_id=current_user.user_id)
         return trip_draft_service.evaluate_draft(session_id, draft_id)
     except (SessionNotFoundError, DraftNotFoundError, VersionNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -874,12 +970,20 @@ def evaluate_trip_draft(session_id: str, draft_id: str):
     summary="确认草稿候选版本",
     response_model=ConfirmDraftResponse,
 )
-def confirm_trip_draft(session_id: str, draft_id: str):
+def confirm_trip_draft(
+    session_id: str,
+    draft_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
     """确认后才更新 AgentState，继续修改则保留原确认版本。"""
     try:
+        agent_state_store.get_state(session_id, user_id=current_user.user_id)
         response = trip_draft_service.confirm_draft(session_id, draft_id)
         # 确认版本会更新 AgentState，必须淘汰旧的终态 execution-view 快照。
-        read_model_cache.delete_execution_view(session_id)
+        read_model_cache.delete_execution_view(
+            session_id,
+            user_id=current_user.user_id,
+        )
         return response
     except (SessionNotFoundError, DraftNotFoundError, VersionNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -892,10 +996,13 @@ def confirm_trip_draft(session_id: str, draft_id: str):
     summary="查询行程版本列表",
     response_model=list[TripPlanVersion],
 )
-def list_trip_plan_versions(session_id: str):
+def list_trip_plan_versions(
+    session_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
     # 先确认会话存在，避免对无效会话返回空列表造成歧义。
     try:
-        agent_state_store.get_state(session_id)
+        agent_state_store.get_state(session_id, user_id=current_user.user_id)
         return trip_version_store.list_versions(session_id)
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -906,11 +1013,46 @@ def list_trip_plan_versions(session_id: str):
     summary="查询指定行程版本",
     response_model=TripPlanVersion,
 )
-def get_trip_plan_version(session_id: str, version_number: int):
+def get_trip_plan_version(
+    session_id: str,
+    version_number: int,
+    current_user: User = Depends(current_user_dependency),
+):
     try:
+        agent_state_store.get_state(session_id, user_id=current_user.user_id)
         return trip_version_store.get_version(session_id, version_number)
-    except VersionNotFoundError as exc:
+    except (SessionNotFoundError, VersionNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete(
+    "/api/trip/sessions/{session_id}",
+    summary="永久删除旅行规划会话",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_trip_session(
+    session_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
+    """级联删除当前用户的任务事件、任务、草稿、版本和会话。"""
+
+    try:
+        task_ids = agent_state_store.delete_session(
+            session_id,
+            user_id=current_user.user_id,
+        )
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    read_model_cache.delete_execution_view(
+        session_id,
+        user_id=current_user.user_id,
+    )
+    for task_id in task_ids:
+        read_model_cache.delete_task_progress(
+            task_id,
+            user_id=current_user.user_id,
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post(
@@ -918,16 +1060,22 @@ def get_trip_plan_version(session_id: str, version_number: int):
     summary="恢复旅行规划会话",
     response_model=AgentState,
 )
-def resume_trip_session(session_id: str):
+def resume_trip_session(
+    session_id: str,
+    current_user: User = Depends(current_user_dependency),
+):
     """从最近检查点继续执行，不重复已经成功完成的动作。"""
 
     try:
         # 步骤 1：加载最近检查点。
-        state = agent_state_store.get_state(session_id)
+        state = agent_state_store.get_state(session_id, user_id=current_user.user_id)
         # 步骤 2：编排器根据已存在的数据决定下一动作，不重复已成功的步骤。
         resumed = trip_orchestrator.resume(state)
         # 恢复执行可能推进时间轴、路线和质量状态，删除旧读模型供下次重建。
-        read_model_cache.delete_execution_view(session_id)
+        read_model_cache.delete_execution_view(
+            session_id,
+            user_id=current_user.user_id,
+        )
         return resumed
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

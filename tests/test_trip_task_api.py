@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 import main
 from app.task_runtime.store import SQLiteTripTaskStore
+from tests.auth_test_helpers import install_main_auth_override, remove_main_auth_override
 
 
 class DummyWorker:
@@ -31,6 +32,7 @@ class TripTaskApiTests(unittest.TestCase):
         main.trip_task_store = SQLiteTripTaskStore(Path(self.tempdir.name) / "api.db")
         main.trip_task_worker = DummyWorker()
         main.settings.TRIP_TASK_WORKER_ENABLED = False
+        install_main_auth_override(main)
         self.client = TestClient(main.app)
         self.payload = {
             "city": "杭州",
@@ -48,6 +50,7 @@ class TripTaskApiTests(unittest.TestCase):
         main.trip_task_store = self.original_store
         main.trip_task_worker = self.original_worker
         main.settings.TRIP_TASK_WORKER_ENABLED = self.original_enabled
+        remove_main_auth_override(main)
         self.tempdir.cleanup()
 
     def test_create_returns_202_and_duplicate_click_reuses_task(self):

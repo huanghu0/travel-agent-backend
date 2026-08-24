@@ -177,6 +177,7 @@ class SQLiteTripTaskStore(TripTaskStore):
         request: TripRequest,
         *,
         idempotency_key: str,
+        user_id: str | None = None,
     ) -> tuple[TripPlanningTask, bool]:
         """原子创建任务；幂等键或同一活动请求命中时返回既有任务。"""
 
@@ -218,6 +219,7 @@ class SQLiteTripTaskStore(TripTaskStore):
                 idempotency_key=key,
                 request_fingerprint=fingerprint,
                 request=request,
+                user_id=user_id,
             )
             connection.execute(
                 """
@@ -245,7 +247,9 @@ class SQLiteTripTaskStore(TripTaskStore):
             self._insert_event(connection, task, "task_queued", task.message)
             return task, False
 
-    def get_task(self, task_id: str) -> TripPlanningTask:
+    def get_task(
+        self, task_id: str, *, user_id: str | None = None
+    ) -> TripPlanningTask:
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT task_json FROM trip_planning_tasks WHERE task_id = ?",
@@ -253,7 +257,10 @@ class SQLiteTripTaskStore(TripTaskStore):
             ).fetchone()
         if row is None:
             raise TripTaskNotFoundError(f"未找到异步旅行规划任务: {task_id}")
-        return self._task_from_row(row)
+        task = self._task_from_row(row)
+        if user_id is not None and task.user_id != user_id:
+            raise TripTaskNotFoundError(f"未找到异步旅行规划任务: {task_id}")
+        return task
 
     def list_events(
         self,
@@ -445,7 +452,9 @@ class SQLiteTripTaskStore(TripTaskStore):
             raise TripTaskNotFoundError(task_id)
         return bool(row["cancel_requested"]) or row["status"] == "cancelled"
 
-    def request_cancel(self, task_id: str) -> TripPlanningTask:
+    def request_cancel(
+        self, task_id: str, *, user_id: str | None = None
+    ) -> TripPlanningTask:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -455,6 +464,8 @@ class SQLiteTripTaskStore(TripTaskStore):
             if row is None:
                 raise TripTaskNotFoundError(f"未找到异步旅行规划任务: {task_id}")
             task = self._task_from_row(row)
+            if user_id is not None and task.user_id != user_id:
+                raise TripTaskNotFoundError(f"未找到异步旅行规划任务: {task_id}")
             if task.terminal:
                 return task
             task.cancel_requested = True

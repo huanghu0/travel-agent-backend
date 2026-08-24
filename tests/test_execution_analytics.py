@@ -7,6 +7,11 @@ from fastapi.testclient import TestClient
 from app.agent_runtime import ActionRecord, AgentAction, AgentState
 from app.memory import SQLiteAgentStateStore
 from app.schemas.trip_schema import TripRequest
+from tests.auth_test_helpers import (
+    TEST_USER,
+    install_main_auth_override,
+    remove_main_auth_override,
+)
 
 
 def make_request(city: str) -> TripRequest:
@@ -30,7 +35,9 @@ def save_session(
     current_step: int,
     records: list[ActionRecord],
 ) -> AgentState:
-    state = AgentState.create(make_request(city), session_id=session_id)
+    state = AgentState.create(
+        make_request(city), session_id=session_id, user_id=TEST_USER.user_id
+    )
     state.status = status
     state.finished = status == "completed"
     state.current_step = current_step
@@ -207,12 +214,14 @@ class ExecutionBaselineTests(unittest.TestCase):
 
         original_store = main.agent_state_store
         main.agent_state_store = self.store
+        install_main_auth_override(main)
         try:
             response = TestClient(main.app).get(
                 "/api/trip/analytics/execution-baseline",
                 params={"city": "杭州", "top_n": 5},
             )
         finally:
+            remove_main_auth_override(main)
             main.agent_state_store = original_store
 
         self.assertEqual(response.status_code, 200)

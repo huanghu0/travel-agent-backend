@@ -21,6 +21,7 @@ from app.plan_content import (
 from app.routing import plan_route_fingerprint
 from app.schemas.trip_schema import TripPlan, TripPlanResponse, TripRequest
 from app.scheduling import ScheduleTimelineEvaluator
+from tests.auth_test_helpers import TEST_USER
 
 
 def make_request() -> TripRequest:
@@ -607,13 +608,15 @@ class TripOrchestratorTests(unittest.TestCase):
         state = make_orchestrator()[0].run(make_request())
 
         class CompletedOrchestrator:
-            def run(self, request):
+            def run(self, request, **kwargs):
                 return state
 
         original = main.trip_orchestrator
         main.trip_orchestrator = CompletedOrchestrator()
         try:
-            response = asyncio.run(main.generate_trip_plan(make_request()))
+            response = asyncio.run(
+                main.generate_trip_plan(make_request(), current_user=TEST_USER)
+            )
         finally:
             main.trip_orchestrator = original
 
@@ -637,13 +640,15 @@ class TripOrchestratorTests(unittest.TestCase):
         )[0].run(make_request())
 
         class CompletedOrchestrator:
-            def run(self, request):
+            def run(self, request, **kwargs):
                 return state
 
         original = main.trip_orchestrator
         main.trip_orchestrator = CompletedOrchestrator()
         try:
-            response = asyncio.run(main.generate_trip_plan(make_request()))
+            response = asyncio.run(
+                main.generate_trip_plan(make_request(), current_user=TEST_USER)
+            )
         finally:
             main.trip_orchestrator = original
 

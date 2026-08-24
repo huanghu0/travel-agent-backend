@@ -26,6 +26,11 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 class Settings:
+    # 用户认证：单个 HS256 Access Token，有效期默认 7 天。
+    JWT_SECRET_KEY: Optional[str] = _env("JWT_SECRET_KEY")
+    JWT_ALGORITHM: str = (_env("JWT_ALGORITHM", "HS256") or "HS256").upper()
+    JWT_EXPIRE_DAYS: int = int(_env("JWT_EXPIRE_DAYS", "7") or "7")
+
     # LLM 协议：responses（OpenAI Responses API）或 anthropic（Messages API）
     LLM_PROTOCOL: str = (_env("LLM_PROTOCOL", "responses") or "responses").lower()
     LLM_TIMEOUT: int = int(_env("LLM_TIMEOUT", "60") or "60")
@@ -508,6 +513,19 @@ class Settings:
     # Unsplash 图片服务
     UNSPLASH_ACCESS_KEY: Optional[str] = _env("UNSPLASH_ACCESS_KEY")
     UNSPLASH_SECRET_KEY: Optional[str] = _env("UNSPLASH_SECRET_KEY")
+
+    def validate_auth_runtime(self) -> None:
+        """正式应用启动前校验认证所需的不可降级配置。"""
+
+        if self.DATABASE_BACKEND != "mysql":
+            raise RuntimeError("用户认证启用后 DATABASE_BACKEND 必须设置为 mysql")
+        secret = (self.JWT_SECRET_KEY or "").strip()
+        if len(secret) < 32:
+            raise RuntimeError("JWT_SECRET_KEY 必须设置且长度至少为 32 个字符")
+        if self.JWT_ALGORITHM != "HS256":
+            raise RuntimeError("JWT_ALGORITHM 当前只支持 HS256")
+        if self.JWT_EXPIRE_DAYS <= 0:
+            raise RuntimeError("JWT_EXPIRE_DAYS 必须是正整数")
 
 
 settings = Settings()

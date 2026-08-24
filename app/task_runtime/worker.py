@@ -161,7 +161,7 @@ class TripTaskWorker:
                     session_id=state.session_id,
                 )
         except TaskCancellationRequested as exc:
-            self._mark_agent_state_cancelled(task.session_id)
+            self._mark_agent_state_cancelled(task.session_id, user_id=task.user_id)
             self._safe_mark_cancelled(task, str(exc) or "用户已取消旅行规划任务")
         except Exception as exc:
             report, timed_out = self._build_failure_report(task, exc)
@@ -181,9 +181,12 @@ class TripTaskWorker:
 
     def _load_or_start(self, task: TripPlanningTask) -> AgentState:
         try:
-            state = self.state_store.get_state(task.session_id)
+            state = self.state_store.get_state(task.session_id, user_id=task.user_id)
         except SessionNotFoundError:
-            return self.orchestrator.run(task.request, session_id=task.session_id)
+            run_kwargs = {"session_id": task.session_id}
+            if task.user_id is not None:
+                run_kwargs["user_id"] = task.user_id
+            return self.orchestrator.run(task.request, **run_kwargs)
         return self.orchestrator.resume(state)
 
     def _heartbeat_loop(self, task_id: str, stop_event: threading.Event) -> None:
@@ -201,9 +204,11 @@ class TripTaskWorker:
                 logger.debug("任务 %s 心跳续租失败，将在下一周期重试", task_id, exc_info=True)
                 continue
 
-    def _mark_agent_state_cancelled(self, session_id: str) -> None:
+    def _mark_agent_state_cancelled(
+        self, session_id: str, *, user_id: str | None = None
+    ) -> None:
         try:
-            state = self.state_store.get_state(session_id)
+            state = self.state_store.get_state(session_id, user_id=user_id)
         except SessionNotFoundError:
             return
         state.status = "cancelled"

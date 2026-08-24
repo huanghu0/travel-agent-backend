@@ -7,6 +7,11 @@ from fastapi.testclient import TestClient
 from app.agent_runtime import AgentAction, AgentActionError, AgentState, TripOrchestrator
 from app.memory import SessionNotFoundError, SQLiteAgentStateStore
 from app.schemas.trip_schema import TripRequest
+from tests.auth_test_helpers import (
+    TEST_USER,
+    install_main_auth_override,
+    remove_main_auth_override,
+)
 
 
 def make_request() -> TripRequest:
@@ -390,12 +395,17 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         import main
 
         orchestrator, _ = make_orchestrator(self.store)
-        state = orchestrator.run(make_request(), session_id="api-session")
+        state = orchestrator.run(
+            make_request(),
+            session_id="api-session",
+            user_id=TEST_USER.user_id,
+        )
 
         original_store = main.agent_state_store
         original_orchestrator = main.trip_orchestrator
         main.agent_state_store = self.store
         main.trip_orchestrator = orchestrator
+        install_main_auth_override(main)
         try:
             client = TestClient(main.app)
             detail_response = client.get("/api/trip/sessions/api-session")
@@ -403,6 +413,7 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
             resume_response = client.post("/api/trip/sessions/api-session/resume")
             missing_response = client.get("/api/trip/sessions/missing")
         finally:
+            remove_main_auth_override(main)
             main.agent_state_store = original_store
             main.trip_orchestrator = original_orchestrator
 

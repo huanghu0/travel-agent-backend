@@ -18,6 +18,7 @@ from scripts.init_mysql_databases import _quoted_database
 
 
 EXPECTED_TABLES = {
+    "users",
     "agent_sessions",
     "route_cache",
     "restaurant_cache",

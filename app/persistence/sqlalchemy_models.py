@@ -55,10 +55,24 @@ MYSQL_TABLE_ARGS = {
 }
 
 
+class UserRow(Base):
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    username: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(_datetime_utc(), nullable=False)
+
+    __table_args__ = (MYSQL_TABLE_ARGS,)
+
+
 class AgentSessionRow(Base):
     __tablename__ = "agent_sessions"
 
     session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.user_id"), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     city: Mapped[str] = mapped_column(String(128), nullable=False)
     current_step: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -82,6 +96,8 @@ class AgentSessionRow(Base):
 
     __table_args__ = (
         Index("idx_agent_sessions_updated_at", "updated_at"),
+        Index("idx_agent_sessions_user_updated", "user_id", "updated_at"),
+        Index("idx_agent_sessions_user_status_updated", "user_id", "status", "updated_at"),
         Index("idx_agent_sessions_status", "status"),
         Index("idx_agent_sessions_city", "city"),
         Index("idx_agent_sessions_completion_mode", "completion_mode"),
@@ -171,8 +187,11 @@ class TripPlanningTaskRow(Base):
     __tablename__ = "trip_planning_tasks"
 
     task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.user_id"), nullable=True
+    )
     session_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
-    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     cancel_requested: Mapped[bool] = mapped_column(
@@ -186,7 +205,10 @@ class TripPlanningTaskRow(Base):
     updated_at: Mapped[datetime] = mapped_column(_datetime_utc(), nullable=False)
 
     __table_args__ = (
+        UniqueConstraint("user_id", "idempotency_key", name="uq_trip_tasks_user_idempotency"),
         Index("idx_trip_tasks_status_created", "status", "created_at"),
+        Index("idx_trip_tasks_user_created", "user_id", "created_at"),
+        Index("idx_trip_tasks_user_status_created", "user_id", "status", "created_at"),
         Index("idx_trip_tasks_lease", "lease_expires_at"),
         Index("idx_trip_tasks_fingerprint", "request_fingerprint", "status", "created_at"),
         MYSQL_TABLE_ARGS,

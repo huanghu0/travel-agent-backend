@@ -461,7 +461,13 @@ class TripOrchestrator:
             ),
         )
 
-    def run(self, request: TripRequest, *, session_id: str | None = None) -> AgentState:
+    def run(
+        self,
+        request: TripRequest,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> AgentState:
         """创建一个新会话、持久化初始状态并执行确定性循环。"""
 
         # 步骤 1：为新请求创建独立状态，并把执行上限固化到会话预算中。
@@ -510,6 +516,7 @@ class TripOrchestrator:
             max_tool_calls=self.max_tool_calls,
             max_llm_calls=self.max_llm_calls,
             session_id=session_id,
+            user_id=user_id,
         )
         # 步骤 2：进入确定性循环；循环中的每个动作都会写入检查点。
         return self._run_state(state)
@@ -3380,6 +3387,8 @@ class TripOrchestrator:
     def _checkpoint(self, state: AgentState) -> None:
         """更新时间戳，并把当前完整状态保存为可恢复检查点。"""
 
+        # 异步任务被删除或失去租约后，必须在落盘前停止，避免旧 Worker 重建会话。
+        raise_if_task_cancelled()
         state.touch()
         if self.state_store is None:
             return
