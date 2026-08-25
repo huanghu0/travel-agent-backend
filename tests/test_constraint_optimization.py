@@ -309,6 +309,65 @@ class ConstraintOptimizerTests(unittest.TestCase):
         self.assertEqual(candidate.removed_attraction_names, ["A"])
         self.assertEqual(candidate.plan.days[0].attractions, [])
 
+    def test_optimizer_repairs_multiple_opening_hour_conflicts_in_one_attempt(self):
+        request = make_request()
+        plan = make_plan(("A", "B"), ("C", "D"))
+        original = plan.model_dump()
+        attraction_data = candidates(
+            source("A", opening_hours="12:00-22:00"),
+            source("B", opening_hours="08:00-18:00"),
+            source("C", opening_hours="18:00-23:00"),
+            source("D", opening_hours="08:00-18:00"),
+        )
+        schedule_evaluator = ScheduleTimelineEvaluator()
+        evaluator = ConstraintEvaluator()
+        schedule = schedule_evaluator.evaluate(request, plan, None)
+        report = evaluator.evaluate(
+            request,
+            plan,
+            schedule,
+            attractions=attraction_data,
+        )
+        self.assertEqual(
+            sum(
+                item.code == "attraction.outside_opening_hours"
+                for item in report.issues
+            ),
+            2,
+        )
+
+        candidate = DeterministicConstraintOptimizer(
+            evaluator=evaluator,
+            schedule_evaluator=schedule_evaluator,
+            max_candidates=8,
+        ).optimize(
+            request,
+            plan,
+            report,
+            attractions=attraction_data,
+        )
+
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        self.assertEqual(
+            candidate.strategy,
+            "remove_attractions_outside_opening_hours",
+        )
+        self.assertEqual(candidate.removed_attraction_names, ["A", "C"])
+        self.assertEqual(plan.model_dump(), original)
+        repaired_schedule = schedule_evaluator.evaluate(request, candidate.plan, None)
+        repaired_report = evaluator.evaluate(
+            request,
+            candidate.plan,
+            repaired_schedule,
+            attractions=attraction_data,
+        )
+        self.assertNotIn(
+            "attraction.outside_opening_hours",
+            {item.code for item in repaired_report.issues},
+        )
+        self.assertLessEqual(candidate.considered_candidates, 2)
+
     def test_optimizer_returns_none_without_repairable_issue(self):
         request = make_request()
         plan = make_plan(("A",), ())

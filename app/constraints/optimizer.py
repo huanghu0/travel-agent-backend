@@ -55,6 +55,24 @@ class DeterministicConstraintOptimizer:
             weather=weather,
         )
         baseline_cost = self._combined_cost(baseline_constraints, baseline_schedule)
+
+        # 营业时间冲突经常会同时出现在多个日期。例如茶舍、酒吧被模型误当成
+        # 普通景点后，时间轴会把它们安排在上午。通用优化器一次只移动一个景点，
+        # 而编排器默认只有一次约束优化预算，因此两个冲突会在第一次优化后仍留下
+        # 一个错误，最终浪费 LLM 修复次数。这里先执行一次有界的批量确定性修复：
+        # 优先把冲突地点移到当日末尾；仍无法满足营业时间的地点才会被移除，随后
+        # 由最低景点保障流程从其他高德候选中回填。
+        opening_hours_candidate = self._repair_opening_hours_conflicts(
+            request,
+            plan,
+            baseline_constraints,
+            baseline_cost=baseline_cost,
+            attractions=attractions,
+            weather=weather,
+        )
+        if opening_hours_candidate is not None:
+            return opening_hours_candidate
+
         candidates: list[tuple[str, int, int, int, TripPlan, str]] = []
         seen: set[str] = set()
 
@@ -219,6 +237,196 @@ class DeterministicConstraintOptimizer:
             source_day_index=self._stable_day_index(plan, source_position),
             target_day_index=self._stable_day_index(plan, target_position),
             moved_attraction_name=moved_name,
+            target_insertion_index=insertion_index,
+            removed_attraction_names=removed_names,
+            strategy=strategy,
+            baseline_cost=round(baseline_cost, 2),
+            candidate_cost=round(candidate_cost, 2),
+            approximate_improvement_percent=round(improvement, 2),
+            considered_candidates=considered,
+        )
+
+    def _repair_opening_hours_conflicts(
+        self,
+        request: TripRequest,
+        plan: TripPlan,
+        report: TripConstraintReport,
+        *,
+        baseline_cost: float,
+        attractions: dict | None,
+        weather: dict | None,
+    ) -> ConstraintOptimizationCandidate | None:
+        """在一次约束优化尝试中收敛所有明确的景点营业时间冲突。
+
+        最多评估两个候选且不调用外部服务：先批量重排，再批量移除仍然冲突
+        的地点。真实路线、时间轴和约束仍由编排器在接受候选前重新验证。
+        """
+
+        opening_issues = [
+            item
+            for item in report.issues
+            if item.repairable
+            and item.code == "attraction.outside_opening_hours"
+            and item.source_index is not None
+        ]
+        if not opening_issues:
+            return None
+
+        # 保存稳定身份，避免同一天移动第一个元素后导致后续 source_index 偏移。
+        targets: list[tuple[int, str, str]] = []
+        for issue in opening_issues:
+            day_position = self._day_position(plan, issue.day_index)
+            if day_position is None:
+                continue
+            source_index = issue.source_index
+            if source_index is None or source_index >= len(plan.days[day_position].attractions):
+                continue
+            attraction = plan.days[day_position].attractions[source_index]
+            targets.append((issue.day_index, attraction.poi_id or "", attraction.name))
+        if not targets:
+            return None
+
+        working = plan.model_copy(deep=True)
+        moved_names: list[str] = []
+        for day_index, poi_id, name in targets:
+            day_position = self._day_position(working, day_index)
+            if day_position is None:
+                continue
+            source_index = self._find_attraction_index(
+                working, day_position, poi_id=poi_id, name=name
+            )
+            if source_index is None:
+                continue
+            day_attractions = working.days[day_position].attractions
+            if source_index != len(day_attractions) - 1:
+                moved = day_attractions.pop(source_index)
+                day_attractions.append(moved)
+                moved_names.append(moved.name)
+
+        considered = 1
+        schedule = self.schedule_evaluator.evaluate(request, working, None)
+        constraints = self.evaluator.evaluate(
+            request, working, schedule, attractions=attractions, weather=weather
+        )
+        remaining = [
+            item
+            for item in constraints.issues
+            if item.code == "attraction.outside_opening_hours"
+            and item.source_index is not None
+        ]
+        candidate_cost = self._combined_cost(constraints, schedule)
+        if not remaining and candidate_cost + 0.01 < baseline_cost:
+            first_day = targets[0][0]
+            day_position = self._day_position(working, first_day) or 0
+            return self._opening_hours_candidate(
+                plan=working,
+                source_day_index=first_day,
+                moved_names=moved_names,
+                removed_names=[],
+                insertion_index=max(0, len(working.days[day_position].attractions) - 1),
+                baseline_cost=baseline_cost,
+                candidate_cost=candidate_cost,
+                considered=considered,
+                strategy="reorder_attractions_for_opening_hours",
+            )
+
+        if not remaining or self.max_candidates < 2:
+            return None
+
+        # 按日期和下标倒序删除，保证同一天删除多个元素时下标仍然有效。
+        removals: list[tuple[int, int, str]] = []
+        for issue in remaining:
+            day_position = self._day_position(working, issue.day_index)
+            source_index = issue.source_index
+            if (
+                day_position is None
+                or source_index is None
+                or source_index >= len(working.days[day_position].attractions)
+            ):
+                continue
+            removals.append(
+                (
+                    day_position,
+                    source_index,
+                    working.days[day_position].attractions[source_index].name,
+                )
+            )
+        if not removals:
+            return None
+
+        removed_names: list[str] = []
+        for day_position, source_index, name in sorted(removals, reverse=True):
+            working.days[day_position].attractions.pop(source_index)
+            removed_names.append(name)
+        removed_names.reverse()
+
+        considered += 1
+        schedule = self.schedule_evaluator.evaluate(request, working, None)
+        constraints = self.evaluator.evaluate(
+            request, working, schedule, attractions=attractions, weather=weather
+        )
+        if any(
+            item.code == "attraction.outside_opening_hours"
+            for item in constraints.issues
+        ):
+            return None
+        candidate_cost = self._combined_cost(constraints, schedule)
+        if candidate_cost + 0.01 >= baseline_cost:
+            return None
+
+        first_day = targets[0][0]
+        day_position = self._day_position(working, first_day) or 0
+        return self._opening_hours_candidate(
+            plan=working,
+            source_day_index=first_day,
+            moved_names=moved_names,
+            removed_names=removed_names,
+            insertion_index=max(0, len(working.days[day_position].attractions) - 1),
+            baseline_cost=baseline_cost,
+            candidate_cost=candidate_cost,
+            considered=considered,
+            strategy="remove_attractions_outside_opening_hours",
+        )
+
+    @staticmethod
+    def _find_attraction_index(
+        plan: TripPlan,
+        day_position: int,
+        *,
+        poi_id: str,
+        name: str,
+    ) -> int | None:
+        for index, attraction in enumerate(plan.days[day_position].attractions):
+            if poi_id and attraction.poi_id == poi_id:
+                return index
+            if attraction.name == name:
+                return index
+        return None
+
+    @staticmethod
+    def _opening_hours_candidate(
+        *,
+        plan: TripPlan,
+        source_day_index: int,
+        moved_names: list[str],
+        removed_names: list[str],
+        insertion_index: int,
+        baseline_cost: float,
+        candidate_cost: float,
+        considered: int,
+        strategy: str,
+    ) -> ConstraintOptimizationCandidate:
+        improvement = (
+            (baseline_cost - candidate_cost) / baseline_cost * 100.0
+            if baseline_cost > 0
+            else 0.0
+        )
+        affected_names = moved_names or removed_names
+        return ConstraintOptimizationCandidate(
+            plan=plan,
+            source_day_index=source_day_index,
+            target_day_index=source_day_index,
+            moved_attraction_name="、".join(affected_names),
             target_insertion_index=insertion_index,
             removed_attraction_names=removed_names,
             strategy=strategy,
