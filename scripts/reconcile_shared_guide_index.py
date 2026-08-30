@@ -20,7 +20,11 @@ from qdrant_client import models
 from app.core.config import settings
 from app.persistence.database import MySQLDatabaseConfig, create_mysql_engine
 from app.rag.embedding import DashScopeEmbeddingClient
-from app.rag.qdrant_index import QdrantSharedGuideIndex, create_qdrant_client
+from app.rag.qdrant_index import (
+    QdrantSharedGuideIndex,
+    create_qdrant_client,
+    validate_collection_name,
+)
 from app.sharing.models import PublicationStatus, ShareIndexStatus
 from scripts.reindex_shared_guides import (
     CollectionSchemaMismatchError,
@@ -33,7 +37,6 @@ from scripts.reindex_shared_guides import (
     iter_active_public,
     read_authoritative_record,
     utc_now,
-    validate_collection_name,
     validate_existing_collection,
 )
 

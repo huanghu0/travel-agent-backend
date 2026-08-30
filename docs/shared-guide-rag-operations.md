@@ -23,6 +23,161 @@ Stop it without deleting its named volume:
 docker compose -f docker-compose.qdrant.yml stop
 ```
 
+## CentOS 7 Compose deployment
+
+The production host keeps its active Compose and environment files outside this
+repository in `/home/aicreator/apps/travel-agent-infra`. Do not copy those files
+into the backend checkout or add them to Git. Keep `infra.env` and `backend.env`
+at mode `0600`.
+
+Add only this `backend` service to the existing `services:` mapping in the
+server's `compose.yaml`; leave the existing MySQL/Qdrant services and named
+volumes unchanged:
+
+```yaml
+  backend:
+    build:
+      context: ../travel-agent-backend
+      dockerfile: Dockerfile
+    image: travel-agent-backend:rag
+    container_name: travel-agent-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend.env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8000:8000"
+    mem_limit: 768m
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read(1)
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+```
+
+`backend.env` must retain the approved LLM, map-provider, authentication, and
+other application settings and must include these deployment values:
+
+```text
+DATABASE_BACKEND=mysql
+MYSQL_HOST=mysql
+MYSQL_PORT=3306
+MYSQL_DATABASE=travel_agent
+MYSQL_USER=travel_agent_app
+
+QDRANT_URL=http://qdrant:6333
+QDRANT_COLLECTION=shared_guide_embeddings_v1
+QDRANT_TIMEOUT_SECONDS=5
+
+EMBEDDING_MODEL=qwen3.7-text-embedding
+EMBEDDING_DIMENSION=768
+
+REDIS_ENABLED=false
+SHARE_SQUARE_ENABLED=false
+RAG_ENABLED=false
+DEPENDENCY_WAIT_TIMEOUT_SECONDS=60
+```
+
+Populate `MYSQL_PASSWORD`, `JWT_SECRET_KEY`, `DASHSCOPE_API_KEY`,
+`DASHSCOPE_BASE_URL`, and the active LLM/map-provider credentials only in the
+server file. `JWT_SECRET_KEY` must contain at least 32 characters. The current
+host-local Qdrant deployment may keep `QDRANT_API_KEY` empty.
+
+Validate, build, and start dependencies without printing resolved environment
+values:
+
+```bash
+cd /home/aicreator/apps/travel-agent-infra
+chmod 600 infra.env backend.env
+sudo docker compose --env-file ./infra.env -f ./compose.yaml config --quiet
+sudo docker compose --env-file ./infra.env -f ./compose.yaml build backend
+sudo docker compose --env-file ./infra.env -f ./compose.yaml up -d mysql qdrant
+sudo docker compose --env-file ./infra.env -f ./compose.yaml ps
+curl -fsS http://127.0.0.1:6333/readyz
+```
+
+Run migrations and provision Qdrant before starting the backend:
+
+```bash
+sudo docker compose --env-file ./infra.env -f ./compose.yaml run --rm backend alembic upgrade head
+sudo docker compose --env-file ./infra.env -f ./compose.yaml run --rm backend alembic current
+sudo docker compose --env-file ./infra.env -f ./compose.yaml run --rm backend python scripts/ensure_shared_guide_collection.py
+```
+
+`alembic current` must report `f4c2a81d9e30 (head)`. Provisioning must report
+`collection=shared_guide_embeddings_v1 dimension=768 distance=Cosine` and must
+stop without mutation on an incompatible existing collection.
+
+Start with both features disabled, then verify health and binding:
+
+```bash
+sudo docker compose --env-file ./infra.env -f ./compose.yaml up -d backend
+sudo docker compose --env-file ./infra.env -f ./compose.yaml ps
+curl -fsS http://127.0.0.1:8000/api/health
+sudo ss -lntp | grep -E '127\.0\.0\.1:8000\b'
+sudo docker compose --env-file ./infra.env -f ./compose.yaml run --rm backend python scripts/reindex_shared_guides.py
+sudo docker compose --env-file ./infra.env -f ./compose.yaml run --rm backend python scripts/reconcile_shared_guide_index.py
+```
+
+Enable sharing first by changing only `SHARE_SQUARE_ENABLED=true`, then recreate
+only the backend so it receives the updated environment:
+
+```bash
+sed -i 's/^SHARE_SQUARE_ENABLED=.*/SHARE_SQUARE_ENABLED=true/' backend.env
+sudo docker compose --env-file ./infra.env -f ./compose.yaml up -d --force-recreate backend
+curl -fsS http://127.0.0.1:8000/api/health
+curl -fsS 'http://127.0.0.1:8000/api/shared-guides?limit=1'
+```
+
+Use an authenticated existing account and one owned completed trip session to
+publish a guide through `POST /api/trip/sessions/{session_id}/share`; wait until
+its owned projection reports `publication_status=PUBLIC` and
+`index_status=READY`, then confirm it appears in the public list.
+
+Enable RAG only after that publication is indexed:
+
+```bash
+sed -i 's/^RAG_ENABLED=.*/RAG_ENABLED=true/' backend.env
+sudo docker compose --env-file ./infra.env -f ./compose.yaml up -d --force-recreate backend
+curl -fsS http://127.0.0.1:8000/api/health
+```
+
+The health response must report Qdrant and RAG ready with
+`embedding_configured=true`. Generate one same-city trip and confirm retrieval
+uses the indexed public guide through the RAG metrics/response metadata.
+
+After first-deployment acceptance, normal host startup uses:
+
+```bash
+sudo docker compose --env-file ./infra.env -f ./compose.yaml up -d
+```
+
+Continue to use `up -d --force-recreate backend` whenever `backend.env`
+changes; a plain `restart backend` can retain the old container environment.
+
+For rollback, disable both feature flags and recreate only the backend:
+
+```bash
+sed -i 's/^RAG_ENABLED=.*/RAG_ENABLED=false/' backend.env
+sed -i 's/^SHARE_SQUARE_ENABLED=.*/SHARE_SQUARE_ENABLED=false/' backend.env
+sudo docker compose --env-file ./infra.env -f ./compose.yaml up -d --force-recreate backend
+curl -fsS http://127.0.0.1:8000/api/health
+```
+
+Keep the MySQL revision, Qdrant collection, and named volumes. If code rollback
+is also required, check out the previous approved commit, rebuild only
+`backend`, and recreate only that service. Do not run `alembic downgrade`, and
+never use `docker compose down -v` as application rollback.
+
 Production Qdrant must be reachable only on an internal network. Set the server-side `QDRANT__SERVICE__API_KEY` and pass the matching value to the backend as `QDRANT_API_KEY`. Keep both out of Compose files, source control, shell history, screenshots, and logs.
 
 Before either feature flag is enabled, configure MySQL, Qdrant, and DashScope, then run:

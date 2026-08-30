@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import uuid
 from typing import Any, Mapping, Sequence
 
@@ -35,6 +36,17 @@ _PAYLOAD_INDEXES = (
     ("transportation", models.PayloadSchemaType.KEYWORD),
     ("visibility", models.PayloadSchemaType.KEYWORD),
 )
+
+_COLLECTION_NAME = re.compile(r"^shared_guide_embeddings_v[1-9][0-9]*$")
+
+
+def validate_collection_name(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not _COLLECTION_NAME.fullmatch(normalized):
+        raise ValueError(
+            "QDRANT_COLLECTION must be an explicit shared_guide_embeddings_vN collection"
+        )
+    return normalized
 
 
 def create_qdrant_client(*, url: str, api_key: str | None, timeout_seconds: float) -> QdrantClient:

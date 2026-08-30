@@ -51,3 +51,9 @@ data/
 
 # --- Superpowers progress scratch ---
 .superpowers/
+
+# --- Server-only deployment configuration ---
+compose.yaml
+docker-compose*.yml
+infra.env
+backend.env

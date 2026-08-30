@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -24,7 +23,11 @@ from app.core.config import settings
 from app.persistence.database import MySQLDatabaseConfig, create_mysql_engine
 from app.persistence.mysql_base import as_utc
 from app.rag.embedding import DashScopeEmbeddingClient
-from app.rag.qdrant_index import QdrantSharedGuideIndex, create_qdrant_client
+from app.rag.qdrant_index import (
+    QdrantSharedGuideIndex,
+    create_qdrant_client,
+    validate_collection_name,
+)
 from app.rag.text_builder import EmbeddingTextBuilder
 from app.sharing.exceptions import SharedGuideConflictError
 from app.sharing.models import (
@@ -39,7 +42,6 @@ from app.sharing.models import (
 from app.sharing.mysql_store import MySQLSharedGuideStore
 
 
-_COLLECTION_NAME = re.compile(r"^shared_guide_embeddings_v[1-9][0-9]*$")
 _MAX_BATCH_SIZE = 1000
 
 
@@ -206,15 +208,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=_batch_size, default=100)
     parser.add_argument("--share-id", type=_share_id, default=None)
     return parser.parse_args(argv)
-
-
-def validate_collection_name(value: str) -> str:
-    normalized = str(value or "").strip()
-    if not _COLLECTION_NAME.fullmatch(normalized):
-        raise ValueError(
-            "QDRANT_COLLECTION must be an explicit shared_guide_embeddings_vN collection"
-        )
-    return normalized
 
 
 def validate_existing_collection(
