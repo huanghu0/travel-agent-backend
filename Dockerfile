@@ -9,7 +9,11 @@ WORKDIR /app
 RUN python -c "import ssl; assert ssl.OPENSSL_VERSION.startswith('OpenSSL 3.')"
 
 COPY requirements.txt requirements.txt
-RUN uv pip install --system --no-cache -r requirements.txt
+RUN UV_HTTP_TIMEOUT=300 uv pip install \
+    --system \
+    --no-cache \
+    --index-url https://mirrors.aliyun.com/pypi/simple \
+    -r requirements.txt
 
 COPY alembic.ini alembic.ini
 COPY main.py main.py

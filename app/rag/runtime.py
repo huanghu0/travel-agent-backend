@@ -632,9 +632,7 @@ class RagRuntime:
 
         if probe and self._qdrant_client is not None:
             try:
-                self._qdrant_client.get_collections(
-                    timeout=self._qdrant_timeout_seconds
-                )
+                self._qdrant_client.get_collections()
             except Exception as error:
                 self._qdrant_failure("qdrant_health_check_failed")
                 logger.warning(
