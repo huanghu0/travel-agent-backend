@@ -29,6 +29,8 @@ from app.persistence.mysql_route_cache import MySQLRouteCache
 from app.persistence.mysql_trip_task_store import MySQLTripTaskStore
 from app.persistence.mysql_trip_version_store import MySQLTripVersionStore
 from app.auth.store import MySQLUserStore
+from app.sharing.mysql_store import MySQLSharedGuideStore
+from app.sharing.store import SharedGuideStore
 from app.task_runtime import SQLiteTripTaskStore
 
 
@@ -46,6 +48,7 @@ class PersistenceFactoryTests(unittest.TestCase):
             self.assertIsInstance(stores.trip_task_store, SQLiteTripTaskStore)
             self.assertIsInstance(stores.route_cache, SQLiteRouteCache)
             self.assertIsInstance(stores.restaurant_cache, SQLiteRestaurantCache)
+            self.assertIsNone(stores.shared_guide_store)
 
             self.assertIsInstance(stores.agent_state_store, AgentStateStore)
             self.assertIsInstance(stores.trip_version_store, TripVersionStore)
@@ -68,8 +71,10 @@ class PersistenceFactoryTests(unittest.TestCase):
         self.assertIsInstance(stores.route_cache, MySQLRouteCache)
         self.assertIsInstance(stores.restaurant_cache, MySQLRestaurantCache)
         self.assertIsInstance(stores.user_store, MySQLUserStore)
+        self.assertIsInstance(stores.shared_guide_store, MySQLSharedGuideStore)
         self.assertIsInstance(stores.agent_state_store, AgentStateStore)
         self.assertIsInstance(stores.trip_task_store, TripTaskStore)
+        self.assertIsInstance(stores.shared_guide_store, SharedGuideStore)
 
     def test_factory_can_disable_optional_caches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

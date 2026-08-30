@@ -1,0 +1,21 @@
+{
+  "documents": [
+    {"share_id":"beijing-1-walking","city":"北京","travel_days":1,"transportation":"步行","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"1111111111111111111111111111111111111111111111111111111111111111"},
+    {"share_id":"beijing-3-transit","city":"北京","travel_days":3,"transportation":"公共交通","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"1212121212121212121212121212121212121212121212121212121212121212"},
+    {"share_id":"beijing-5-driving","city":"北京","travel_days":5,"transportation":"自驾","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"1313131313131313131313131313131313131313131313131313131313131313"},
+    {"share_id":"shanghai-1-walking","city":"上海","travel_days":1,"transportation":"步行","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"2121212121212121212121212121212121212121212121212121212121212121"},
+    {"share_id":"shanghai-3-transit","city":"上海","travel_days":3,"transportation":"公共交通","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"2222222222222222222222222222222222222222222222222222222222222222"},
+    {"share_id":"shanghai-5-driving","city":"上海","travel_days":5,"transportation":"自驾","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"2323232323232323232323232323232323232323232323232323232323232323"},
+    {"share_id":"hangzhou-1-walking","city":"杭州","travel_days":1,"transportation":"步行","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"3131313131313131313131313131313131313131313131313131313131313131"},
+    {"share_id":"hangzhou-3-transit","city":"杭州","travel_days":3,"transportation":"公共交通","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"3232323232323232323232323232323232323232323232323232323232323232"},
+    {"share_id":"hangzhou-5-driving","city":"杭州","travel_days":5,"transportation":"自驾","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"3333333333333333333333333333333333333333333333333333333333333333"},
+    {"share_id":"chengdu-1-walking","city":"成都","travel_days":1,"transportation":"步行","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"4141414141414141414141414141414141414141414141414141414141414141"},
+    {"share_id":"chengdu-3-transit","city":"成都","travel_days":3,"transportation":"公共交通","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"4242424242424242424242424242424242424242424242424242424242424242"},
+    {"share_id":"chengdu-5-driving","city":"成都","travel_days":5,"transportation":"自驾","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"4343434343434343434343434343434343434343434343434343434343434343"},
+    {"share_id":"xian-1-walking","city":"西安","travel_days":1,"transportation":"步行","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"5151515151515151515151515151515151515151515151515151515151515151"},
+    {"share_id":"xian-3-transit","city":"西安","travel_days":3,"transportation":"公共交通","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"5252525252525252525252525252525252525252525252525252525252525252"},
+    {"share_id":"xian-5-driving","city":"西安","travel_days":5,"transportation":"自驾","publication_status":"PUBLIC","index_status":"READY","index_version":1,"content_hash":"5353535353535353535353535353535353535353535353535353535353535353"},
+    {"share_id":"cancelled-beijing-3-transit","city":"北京","travel_days":3,"transportation":"公共交通","publication_status":"UNPUBLISHED","index_status":"DELETED","index_version":2,"content_hash":"6161616161616161616161616161616161616161616161616161616161616161"},
+    {"share_id":"private-shanghai-3-transit","city":"上海","travel_days":3,"transportation":"公共交通","publication_status":"PUBLISHING","index_status":"PENDING","index_version":1,"content_hash":"6262626262626262626262626262626262626262626262626262626262626262"}
+  ]
+}

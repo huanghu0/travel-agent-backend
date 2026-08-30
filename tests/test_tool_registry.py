@@ -1,9 +1,11 @@
 import unittest
 
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.providers.amap import AmapClient, AmapProviderClient, GeoPoint
+from app.rag.models import RagContext, RagReference
+from app.schemas.trip_schema import TripPlan, TripRequest
 from app.tools import (
     ToolDefinition,
     ToolErrorType,
@@ -11,6 +13,8 @@ from app.tools import (
     ToolResultError,
     build_trip_tool_registry,
 )
+from app.tools.trip_registry import GeneratePlanInput
+from app.validation import TripValidationResult
 from tests.auth_test_helpers import install_main_auth_override, remove_main_auth_override
 
 
@@ -22,7 +26,254 @@ class EchoOutput(BaseModel):
     value: str
 
 
+def make_trip_request() -> TripRequest:
+    return TripRequest(
+        city="Chengdu",
+        start_date="2026-08-10",
+        end_date="2026-08-10",
+        travel_days=1,
+        transportation="public transit",
+        accommodation="hotel",
+        preferences=["history"],
+    )
+
+
+def make_trip_plan() -> dict:
+    return {
+        "city": "Chengdu",
+        "start_date": "2026-08-10",
+        "end_date": "2026-08-10",
+        "days": [
+            {
+                "date": "2026-08-10",
+                "day_index": 0,
+                "description": "Historic Chengdu",
+                "transportation": "public transit",
+                "accommodation": "hotel",
+                "attractions": [],
+                "meals": [],
+            }
+        ],
+        "weather_info": [],
+        "overall_suggestions": "Book ahead.",
+        "budget": None,
+    }
+
+
+class RecordingRagRetriever:
+    def __init__(self, context: RagContext, calls: list):
+        self.context = context
+        self.calls = calls
+
+    def retrieve(
+        self,
+        request,
+        *,
+        exclude_session_id=None,
+        selected_attractions=(),
+    ):
+        self.calls.append(
+            ("retrieve", request.city, exclude_session_id, tuple(selected_attractions))
+        )
+        return self.context
+
+
+class RecordingPlanner:
+    def __init__(self, calls: list):
+        self.calls = calls
+        self.rag_context = None
+
+    def generate_plan(
+        self,
+        request,
+        attractions,
+        weather,
+        hotels,
+        rag_context=None,
+    ):
+        self.calls.append(("planner", request.city))
+        self.rag_context = rag_context
+        return make_trip_plan()
+
+    def repair_plan(
+        self,
+        request,
+        current_plan,
+        validation_result,
+        attractions,
+        weather,
+        hotels,
+    ):
+        self.calls.append(("repair", request.city))
+        return make_trip_plan()
+
+
 class ToolRegistryTests(unittest.TestCase):
+    def test_generate_plan_input_requires_nonempty_session_id(self):
+        payload = {
+            "request": make_trip_request(),
+            "attractions": {},
+            "weather": {},
+            "hotels": {},
+        }
+
+        with self.assertRaises(ValidationError):
+            GeneratePlanInput.model_validate(payload)
+        with self.assertRaises(ValidationError):
+            GeneratePlanInput.model_validate({"session_id": "", **payload})
+
+    def test_generate_plan_retrieves_before_planner_and_returns_context(self):
+        calls = []
+        context = RagContext(
+            attempted=True,
+            used=True,
+            reason="hit",
+            candidate_count=1,
+            references=[
+                RagReference(
+                    share_id="share-1",
+                    title="Chengdu history route",
+                    city="Chengdu",
+                    travel_days=1,
+                    transportation="public transit",
+                    preferences=["history"],
+                    attraction_names=["Wuhou Shrine"],
+                    daily_summaries=["Visit the historic district."],
+                    overall_suggestions="Reserve tickets.",
+                    vector_score=0.9,
+                    final_score=0.8,
+                )
+            ],
+        )
+        planner = RecordingPlanner(calls)
+        registry = build_trip_tool_registry(
+            planner_agent=planner,
+            rag_retriever=RecordingRagRetriever(context, calls),
+        )
+
+        result = registry.execute(
+            "generate_plan",
+            {
+                "session_id": "session-current",
+                "request": make_trip_request(),
+                "attractions": {},
+                "weather": {},
+                "hotels": {},
+            },
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            calls,
+            [
+                ("retrieve", "Chengdu", "session-current", ()),
+                ("planner", "Chengdu"),
+            ],
+        )
+        self.assertEqual(planner.rag_context, context)
+        validated_plan = TripPlan.model_validate(result.data["trip_plan"])
+        validated_context = RagContext.model_validate(result.data["rag_context"])
+        self.assertEqual(validated_plan.city, "Chengdu")
+        self.assertEqual(validated_context, context)
+        self.assertEqual(registry.llm_call_cost("generate_plan"), 1)
+        descriptor = next(
+            item for item in registry.describe() if item.name == "generate_plan"
+        )
+        self.assertEqual(
+            set(descriptor.output_schema["properties"]),
+            {"trip_plan", "rag_context"},
+        )
+
+    def test_generate_plan_still_calls_planner_for_empty_or_degraded_context(self):
+        contexts = [
+            RagContext(attempted=True, used=False, reason="no_same_city_candidate"),
+            RagContext(attempted=True, used=False, reason="embedding_unavailable"),
+        ]
+
+        for context in contexts:
+            with self.subTest(reason=context.reason):
+                calls = []
+                planner = RecordingPlanner(calls)
+                registry = build_trip_tool_registry(
+                    planner_agent=planner,
+                    rag_retriever=RecordingRagRetriever(context, calls),
+                )
+
+                result = registry.execute(
+                    "generate_plan",
+                    {
+                        "session_id": "session-current",
+                        "request": make_trip_request(),
+                        "attractions": {},
+                        "weather": {},
+                        "hotels": {},
+                    },
+                )
+
+                self.assertTrue(result.success)
+                self.assertEqual([item[0] for item in calls], ["retrieve", "planner"])
+                self.assertEqual(planner.rag_context, context)
+                self.assertEqual(result.data["rag_context"]["reason"], context.reason)
+
+    def test_omitted_retriever_uses_noop_and_preserves_legacy_planner_call(self):
+        calls = []
+
+        class LegacyPlanner:
+            def generate_plan(self, request, attractions, weather, hotels):
+                calls.append(request.city)
+                return make_trip_plan()
+
+        registry = build_trip_tool_registry(planner_agent=LegacyPlanner())
+
+        result = registry.execute(
+            "generate_plan",
+            {
+                "session_id": "legacy-session",
+                "request": make_trip_request(),
+                "attractions": {},
+                "weather": {},
+                "hotels": {},
+            },
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(calls, ["Chengdu"])
+        self.assertEqual(result.data["rag_context"]["reason"], "disabled")
+
+    def test_repair_plan_does_not_retrieve_again(self):
+        calls = []
+        context = RagContext(attempted=True, used=False, reason="no_same_city_candidate")
+        planner = RecordingPlanner(calls)
+        registry = build_trip_tool_registry(
+            planner_agent=planner,
+            rag_retriever=RecordingRagRetriever(context, calls),
+        )
+        registry.execute(
+            "generate_plan",
+            {
+                "session_id": "session-current",
+                "request": make_trip_request(),
+                "attractions": {},
+                "weather": {},
+                "hotels": {},
+            },
+        )
+
+        result = registry.execute(
+            "repair_plan",
+            {
+                "request": make_trip_request(),
+                "current_plan": make_trip_plan(),
+                "validation_result": TripValidationResult.from_issues([]),
+                "attractions": {},
+                "weather": {},
+                "hotels": {},
+            },
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual([item[0] for item in calls], ["retrieve", "planner", "repair"])
+
     def test_registered_tool_validates_input_and_normalizes_output(self):
         registry = ToolRegistry()
         registry.register(

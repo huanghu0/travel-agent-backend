@@ -1,4 +1,5 @@
 import os
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +24,58 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> Optional[int]:
+    """Parse optional feature settings without making module import fatal."""
+
+    value = _env(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _env_float(name: str, default: float) -> Optional[float]:
+    """Parse optional feature settings without making module import fatal."""
+
+    value = _env(name)
+    if not value:
+        return float(default)
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _valid_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _valid_positive_integer(value: object) -> bool:
+    return _valid_integer(value) and value >= 1
+
+
+def _valid_positive_number(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(normalized) and normalized > 0
+
+
+def _valid_score(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(normalized) and -1 <= normalized <= 1
 
 
 class Settings:
@@ -59,6 +112,67 @@ class Settings:
     ) or "https://api.anthropic.com"
     CLAUDE_LLM_MAX_TOKENS: int = int(
         _env("CLAUDE_LLM_MAX_TOKENS", "16384") or "16384"
+    )
+
+    # Shared guide and RAG configuration. Runtime construction may use the
+    # validator result to enter degraded mode when optional services are absent.
+    SHARE_SQUARE_ENABLED: bool = _env_bool("SHARE_SQUARE_ENABLED", False)
+    RAG_ENABLED: bool = _env_bool("RAG_ENABLED", False)
+    QDRANT_URL: str = (
+        _env("QDRANT_URL", "http://127.0.0.1:6333") or ""
+    )
+    QDRANT_API_KEY: Optional[str] = _env("QDRANT_API_KEY")
+    QDRANT_COLLECTION: str = (
+        _env("QDRANT_COLLECTION", "shared_guide_embeddings_v1")
+        or ""
+    )
+    QDRANT_TIMEOUT_SECONDS: Optional[float] = _env_float(
+        "QDRANT_TIMEOUT_SECONDS", 5
+    )
+    DASHSCOPE_API_KEY: Optional[str] = _env("DASHSCOPE_API_KEY")
+    DASHSCOPE_BASE_URL: str = _env("DASHSCOPE_BASE_URL", "") or ""
+    EMBEDDING_MODEL: str = (
+        _env("EMBEDDING_MODEL", "qwen3.7-text-embedding")
+        or "qwen3.7-text-embedding"
+    )
+    EMBEDDING_DIMENSION: Optional[int] = _env_int("EMBEDDING_DIMENSION", 768)
+    EMBEDDING_TIMEOUT_SECONDS: Optional[float] = _env_float(
+        "EMBEDDING_TIMEOUT_SECONDS", 10
+    )
+    EMBEDDING_MAX_ATTEMPTS: Optional[int] = _env_int(
+        "EMBEDDING_MAX_ATTEMPTS", 3
+    )
+    RAG_TOP_K: Optional[int] = _env_int("RAG_TOP_K", 3)
+    RAG_MAX_TOP_K: Optional[int] = _env_int("RAG_MAX_TOP_K", 5)
+    RAG_CANDIDATE_LIMIT: Optional[int] = _env_int("RAG_CANDIDATE_LIMIT", 20)
+    RAG_MIN_SCORE: Optional[float] = _env_float("RAG_MIN_SCORE", 0.55)
+    RAG_REFERENCE_MAX_CHARS: Optional[int] = _env_int(
+        "RAG_REFERENCE_MAX_CHARS", 6000
+    )
+    SHARE_LIST_DEFAULT_LIMIT: Optional[int] = _env_int(
+        "SHARE_LIST_DEFAULT_LIMIT", 20
+    )
+    SHARE_LIST_MAX_LIMIT: Optional[int] = _env_int("SHARE_LIST_MAX_LIMIT", 50)
+    SHARE_INDEX_WORKER_ENABLED: bool = _env_bool(
+        "SHARE_INDEX_WORKER_ENABLED", True
+    )
+    SHARE_INDEX_WORKER_POLL_SECONDS: Optional[float] = _env_float(
+        "SHARE_INDEX_WORKER_POLL_SECONDS", 1
+    )
+    SHARE_INDEX_LEASE_SECONDS: Optional[float] = _env_float(
+        "SHARE_INDEX_LEASE_SECONDS", 120
+    )
+    SHARE_INDEX_SHUTDOWN_TIMEOUT_SECONDS: Optional[float] = _env_float(
+        "SHARE_INDEX_SHUTDOWN_TIMEOUT_SECONDS", 3
+    )
+    SHARE_INDEX_MAX_ATTEMPTS: Optional[int] = _env_int(
+        "SHARE_INDEX_MAX_ATTEMPTS", 5
+    )
+    SHARE_INDEX_RETRY_BASE_SECONDS: Optional[float] = _env_float(
+        "SHARE_INDEX_RETRY_BASE_SECONDS", 2
+    )
+    SHARE_INDEX_RETRY_MAX_SECONDS: Optional[float] = _env_float(
+        "SHARE_INDEX_RETRY_MAX_SECONDS", 300
     )
 
     # 持久化后端选择。SQLite 与 MySQL 均实现统一 Store 接口，默认保留 SQLite。
@@ -526,6 +640,106 @@ class Settings:
             raise RuntimeError("JWT_ALGORITHM 当前只支持 HS256")
         if self.JWT_EXPIRE_DAYS <= 0:
             raise RuntimeError("JWT_EXPIRE_DAYS 必须是正整数")
+
+    def validate_rag_settings(self) -> list[str]:
+        """Return non-secret configuration errors for shared guide and RAG."""
+
+        errors: list[str] = []
+        if not _valid_positive_integer(self.RAG_TOP_K):
+            errors.append("RAG_TOP_K must be a positive integer")
+        if (
+            not _valid_integer(self.RAG_MAX_TOP_K)
+            or not 1 <= self.RAG_MAX_TOP_K <= 5
+        ):
+            errors.append("RAG_MAX_TOP_K must be between 1 and 5")
+        if (
+            _valid_positive_integer(self.RAG_TOP_K)
+            and _valid_integer(self.RAG_MAX_TOP_K)
+            and self.RAG_TOP_K > self.RAG_MAX_TOP_K
+        ):
+            errors.append(
+                "RAG_TOP_K must be less than or equal to RAG_MAX_TOP_K"
+            )
+        if not _valid_positive_integer(self.RAG_CANDIDATE_LIMIT):
+            errors.append("RAG_CANDIDATE_LIMIT must be a positive integer")
+        if not _valid_score(self.RAG_MIN_SCORE):
+            errors.append("RAG_MIN_SCORE must be between -1 and 1")
+        if not _valid_positive_integer(self.RAG_REFERENCE_MAX_CHARS):
+            errors.append("RAG_REFERENCE_MAX_CHARS must be a positive integer")
+        if self.EMBEDDING_MODEL != "qwen3.7-text-embedding":
+            errors.append("EMBEDDING_MODEL must be qwen3.7-text-embedding")
+        if self.EMBEDDING_DIMENSION != 768:
+            errors.append("EMBEDDING_DIMENSION must be 768")
+        if not _valid_positive_number(self.QDRANT_TIMEOUT_SECONDS):
+            errors.append("QDRANT_TIMEOUT_SECONDS must be positive")
+        if not _valid_positive_number(self.EMBEDDING_TIMEOUT_SECONDS):
+            errors.append("EMBEDDING_TIMEOUT_SECONDS must be positive")
+        if not _valid_positive_number(self.SHARE_INDEX_SHUTDOWN_TIMEOUT_SECONDS):
+            errors.append("SHARE_INDEX_SHUTDOWN_TIMEOUT_SECONDS must be positive")
+        if not _valid_positive_number(self.SHARE_INDEX_LEASE_SECONDS):
+            errors.append("SHARE_INDEX_LEASE_SECONDS must be positive")
+        if not _valid_positive_integer(self.SHARE_INDEX_MAX_ATTEMPTS):
+            errors.append("SHARE_INDEX_MAX_ATTEMPTS must be a positive integer")
+        if not _valid_positive_number(self.SHARE_INDEX_RETRY_BASE_SECONDS):
+            errors.append("SHARE_INDEX_RETRY_BASE_SECONDS must be positive")
+        if not _valid_positive_number(self.SHARE_INDEX_RETRY_MAX_SECONDS):
+            errors.append("SHARE_INDEX_RETRY_MAX_SECONDS must be positive")
+        if not _valid_positive_number(self.SHARE_INDEX_WORKER_POLL_SECONDS):
+            errors.append("SHARE_INDEX_WORKER_POLL_SECONDS must be positive")
+        if (
+            _valid_positive_number(self.SHARE_INDEX_RETRY_BASE_SECONDS)
+            and _valid_positive_number(self.SHARE_INDEX_RETRY_MAX_SECONDS)
+            and self.SHARE_INDEX_RETRY_BASE_SECONDS
+            > self.SHARE_INDEX_RETRY_MAX_SECONDS
+        ):
+            errors.append(
+                "SHARE_INDEX_RETRY_BASE_SECONDS must not exceed SHARE_INDEX_RETRY_MAX_SECONDS"
+            )
+        if not _valid_positive_integer(self.SHARE_LIST_DEFAULT_LIMIT):
+            errors.append("SHARE_LIST_DEFAULT_LIMIT must be a positive integer")
+        if not _valid_positive_integer(self.SHARE_LIST_MAX_LIMIT):
+            errors.append("SHARE_LIST_MAX_LIMIT must be a positive integer")
+        if (
+            _valid_positive_integer(self.SHARE_LIST_DEFAULT_LIMIT)
+            and _valid_positive_integer(self.SHARE_LIST_MAX_LIMIT)
+            and self.SHARE_LIST_DEFAULT_LIMIT > self.SHARE_LIST_MAX_LIMIT
+        ):
+            errors.append(
+                "SHARE_LIST_DEFAULT_LIMIT must not exceed SHARE_LIST_MAX_LIMIT"
+            )
+        if (
+            _valid_positive_number(self.EMBEDDING_TIMEOUT_SECONDS)
+            and _valid_positive_integer(self.EMBEDDING_MAX_ATTEMPTS)
+            and _valid_positive_number(self.QDRANT_TIMEOUT_SECONDS)
+            and _valid_positive_number(self.SHARE_INDEX_LEASE_SECONDS)
+        ):
+            required_lease = (
+                self.EMBEDDING_TIMEOUT_SECONDS * self.EMBEDDING_MAX_ATTEMPTS
+                + self.QDRANT_TIMEOUT_SECONDS
+                + 30
+            )
+            if self.SHARE_INDEX_LEASE_SECONDS <= required_lease:
+                errors.append(
+                    "SHARE_INDEX_LEASE_SECONDS must be greater than embedding and Qdrant timeout budget plus 30 seconds"
+                )
+        if self.SHARE_SQUARE_ENABLED or self.RAG_ENABLED:
+            if not self.QDRANT_URL:
+                errors.append(
+                    "QDRANT_URL is required when shared guide or RAG is enabled"
+                )
+            if not self.QDRANT_COLLECTION:
+                errors.append(
+                    "QDRANT_COLLECTION is required when shared guide or RAG is enabled"
+                )
+            if not self.DASHSCOPE_API_KEY:
+                errors.append(
+                    "DASHSCOPE_API_KEY is required when shared guide or RAG is enabled"
+                )
+            if not self.DASHSCOPE_BASE_URL:
+                errors.append(
+                    "DASHSCOPE_BASE_URL is required when shared guide or RAG is enabled"
+                )
+        return errors
 
 
 settings = Settings()

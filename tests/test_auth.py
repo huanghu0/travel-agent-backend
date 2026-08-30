@@ -4,11 +4,14 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.auth.dependencies import build_current_user_dependency
+from app.auth.dependencies import (
+    build_current_user_dependency,
+    build_optional_current_user_dependency,
+)
 from app.auth.models import UserRecord
 from app.auth.router import build_auth_router
 from app.auth.schemas import AuthCredentials
@@ -108,6 +111,69 @@ class AuthTests(unittest.TestCase):
         missing = self.client.get("/api/auth/me")
         self.assertEqual(401, missing.status_code)
         self.assertEqual("Bearer", missing.headers["www-authenticate"])
+
+    def test_optional_current_user_accepts_anonymous_requests_and_valid_bearer(self):
+        app = FastAPI()
+        optional_user = build_optional_current_user_dependency(self.service)
+
+        @app.get("/optional")
+        def optional_me(user=Depends(optional_user)):
+            return {"username": user.username if user else None}
+
+        client = TestClient(app)
+        try:
+            self.assertEqual({"username": None}, client.get("/optional").json())
+            token = self.service.register(
+                AuthCredentials(username="viewer", password="correct-password")
+            ).access_token
+            response = client.get(
+                "/optional", headers={"Authorization": f"Bearer {token}"}
+            )
+            self.assertEqual(200, response.status_code)
+            self.assertEqual({"username": "viewer"}, response.json())
+        finally:
+            client.close()
+
+    def test_optional_current_user_rejects_supplied_bad_credentials_and_degrades_only_when_supplied(self):
+        app = FastAPI()
+        optional_user = build_optional_current_user_dependency(self.service)
+
+        @app.get("/optional")
+        def optional_me(user=Depends(optional_user)):
+            return {"username": user.username if user else None}
+
+        client = TestClient(app)
+        try:
+            for authorization in ("Basic abc", "Bearer", "Bearer invalid"):
+                with self.subTest(authorization=authorization):
+                    response = client.get(
+                        "/optional", headers={"Authorization": authorization}
+                    )
+                    self.assertEqual(401, response.status_code)
+                    self.assertEqual("Bearer", response.headers["www-authenticate"])
+        finally:
+            client.close()
+
+        unavailable_app = FastAPI()
+        unavailable_user = build_optional_current_user_dependency(None)
+
+        @unavailable_app.get("/optional")
+        def unavailable_optional_me(user=Depends(unavailable_user)):
+            return {"username": user.username if user else None}
+
+        unavailable_client = TestClient(unavailable_app)
+        try:
+            self.assertEqual(
+                {"username": None}, unavailable_client.get("/optional").json()
+            )
+            self.assertEqual(
+                503,
+                unavailable_client.get(
+                    "/optional", headers={"Authorization": "Bearer token"}
+                ).status_code,
+            )
+        finally:
+            unavailable_client.close()
 
     def test_expired_and_wrong_type_tokens_are_rejected(self):
         old = datetime.now(timezone.utc) - timedelta(days=8)

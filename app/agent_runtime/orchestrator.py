@@ -88,7 +88,7 @@ from app.task_runtime.context import (
 )
 from app.tools.models import ActionResult, ToolErrorType
 from app.tools.registry import ToolRegistry
-from app.tools.trip_registry import build_trip_tool_registry
+from app.tools.trip_registry import GeneratePlanResult, build_trip_tool_registry
 from app.validation import TripPlanValidator, remove_duplicate_attractions
 
 
@@ -3181,6 +3181,7 @@ class TripOrchestrator:
             }
         if action is AgentAction.GENERATE_PLAN:
             return {
+                "session_id": state.session_id,
                 "request": state.request,
                 "attractions": state.attractions,
                 "weather": state.weather,
@@ -3292,9 +3293,11 @@ class TripOrchestrator:
             self._invalidate_evaluation_fingerprints(state, "constraints", "validation")
             return
         if action is AgentAction.GENERATE_PLAN:
+            generated = GeneratePlanResult.model_validate(result.data)
+            state.rag_context = generated.rag_context
             state.trip_plan = self._normalize_llm_plan(
                 state,
-                TripPlan.model_validate(result.data),
+                generated.trip_plan,
                 action,
             )
             self._clear_route_analysis(

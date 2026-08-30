@@ -11,7 +11,7 @@
 - 分享广场中的公开攻略构成 RAG 知识库。
 - 在生成新攻略前，根据当前用户条件检索最相关的 3～5 份公开攻略，把裁剪后的参考信息提供给 PlannerAgent。
 - MySQL 继续保存全部业务事实；Docker 自建 Qdrant 仅保存可重建的向量索引。
-- Embedding 使用 Gemini 免费层的 gemini-embedding-2，固定输出 768 维向量。
+- Embedding 使用阿里云百炼 `qwen3.7-text-embedding`，固定输出 768 维向量。
 - RAG 或向量服务故障时，现有旅行攻略生成能力必须继续可用。
 
 本次不实现每日分块向量、管理员审核、举报、评论、关注、全文关键词搜索、跨城市推荐或自动内容审核。分享后立即进入发布流程；只有向量准备成功的内容才对外显示并参与 RAG。
@@ -19,7 +19,7 @@
 ## 2. 已确认的产品与技术决策
 
 - Qdrant 使用 Docker 自建，不使用 Qdrant Cloud Inference。
-- Qdrant 不负责生成 Dense Embedding；应用调用 Gemini API 后把向量写入 Qdrant。
+- Qdrant 不负责生成 Dense Embedding；应用调用百炼 OpenAI 兼容 API 后把向量写入 Qdrant。
 - 每份分享攻略只生成一个整体向量，首期不按每日行程分块。
 - 分享内容是当时确认版本的不可变快照，原攻略后续修改不会自动改变公开内容。
 - 用户可以执行“更新分享”，用最新确认版本替换公开快照并重建向量。
@@ -46,7 +46,7 @@
             |                       share_index_jobs
             |
             v
-    GeminiEmbeddingClient
+    DashScopeEmbeddingClient
             |
             v
     Qdrant shared_guide_embeddings_v1
@@ -56,7 +56,7 @@
             v
     RagRetrievalService
        |        |
-       |        +--> Gemini 查询向量
+       |        +--> DashScope 查询向量
        +-----------> Qdrant 过滤与向量检索
                          |
                          v
@@ -73,7 +73,7 @@ MySQL 是唯一业务事实来源。Qdrant point 只能引用 share_id 并保存
 RAG 组件应保持独立边界，建议分为以下职责：
 
 - EmbeddingTextBuilder：生成版本化、确定性的文档文本和查询文本。
-- GeminiEmbeddingClient：负责请求、超时、有限重试、维度校验和错误映射。
+- DashScopeEmbeddingClient：负责请求、超时、有限重试、维度校验和错误映射。
 - QdrantSharedGuideIndex：负责 Collection 初始化、upsert、查询和删除。
 - RagRetrievalService：负责分级过滤、候选合并、MySQL 回查、重排和裁剪。
 - SharedGuideService：负责分享、更新、取消分享及所有权和版本校验。
@@ -104,7 +104,7 @@ RAG 组件应保持独立边界，建议分为以下职责：
 - 保留 share_id 和已有点赞关系。
 - 在一个 MySQL 事务中把 publication_status 改为 PUBLISHING、index_status 改为 PENDING，并让 index_version 加一。
 - 重新计算 retrieval_text 和 content_hash。
-- content_hash 未变化时只更新允许变化的展示字段，并直接恢复 PUBLIC + READY，不重复调用 Gemini。
+- content_hash 未变化时只更新允许变化的展示字段，并直接恢复 PUBLIC + READY，不重复调用 DashScope。
 - content_hash 变化时重新生成向量并覆盖同一个 Qdrant point，成功后恢复 PUBLIC + READY。
 - 任何旧补偿任务必须携带 index_version；版本不匹配时直接丢弃，防止旧向量覆盖新内容。
 
@@ -141,7 +141,7 @@ RAG 检索命中 Qdrant 后必须批量回查 MySQL，只接受 PUBLIC 且 READY
 | quality_score | FLOAT | 0～100 |
 | publication_status | VARCHAR(32) | PUBLISHING、PUBLIC、UNPUBLISHED |
 | index_status | VARCHAR(32) | PENDING、READY、FAILED、DELETE_PENDING、DELETED |
-| embedding_model | VARCHAR(128) | gemini-embedding-2 |
+| embedding_model | VARCHAR(128) | qwen3.7-text-embedding |
 | embedding_dimension | INT | 固定 768 |
 | retrieval_template_version | VARCHAR(64) | 初始 retrieval_template_v1 |
 | index_version | INT | 初始 1，更新分享时递增 |
@@ -257,9 +257,9 @@ Payload 只保存检索和诊断所需字段：
 
 查询文本使用当前 TripRequest 中已经存在的信息：城市、天数、交通、住宿、偏好、额外要求，以及用户明确选择的景点。不能把高德返回的整个候选景点池放入查询，以免候选来源反向主导召回。
 
-Embedding 固定使用 gemini-embedding-2 和 768 维输出。索引文档与查询使用同一模型、维度和版本化指令模板。响应向量维度不等于 768、包含非有限数或为空时必须拒绝写入和检索。
+Embedding 固定使用 `qwen3.7-text-embedding` 和 768 维输出。索引文档与查询使用同一模型、维度和版本化指令模板。响应向量维度不等于 768、包含非有限数或为空时必须拒绝写入和检索。
 
-免费层可能把提交内容用于改进服务。发送到 Gemini 的范围仅限公开攻略检索文本和当前用户的旅行检索条件，不发送用户名、用户 ID、Token、密码、完整 AgentState 或点赞关系。
+将 DashScope 视为外部数据处理方。发送范围仅限公开攻略检索文本和当前用户的旅行检索条件，不发送用户名、用户 ID、Token、密码、完整 AgentState 或点赞关系；生产前确认服务层级和数据治理条款。
 
 ## 8. 检索、过滤和重排
 
@@ -288,7 +288,7 @@ RAG_MIN_SCORE 作为环境配置，初始实验值为 0.55；最终值必须通�
 
 以下情况返回空 RagContext，并继续正常生成：
 
-- Gemini 请求超时、限流、额度耗尽或返回无效向量。
+- DashScope 请求超时、限流、额度耗尽或返回无效向量。
 - Qdrant 连接或查询失败。
 - 没有满足同城过滤与相似度阈值的候选。
 - Qdrant 候选全部被 MySQL 二次验证淘汰。
@@ -379,8 +379,9 @@ Qdrant 使用固定、经过测试的镜像版本，不能使用 latest。开发
     QDRANT_COLLECTION=shared_guide_embeddings_v1
     QDRANT_TIMEOUT_SECONDS=5
 
-    GEMINI_EMBEDDING_API_KEY=
-    EMBEDDING_MODEL=gemini-embedding-2
+    DASHSCOPE_API_KEY=
+    DASHSCOPE_BASE_URL=
+    EMBEDDING_MODEL=qwen3.7-text-embedding
     EMBEDDING_DIMENSION=768
     EMBEDDING_TIMEOUT_SECONDS=10
 
@@ -391,13 +392,13 @@ Qdrant 使用固定、经过测试的镜像版本，不能使用 latest。开发
     RAG_REFERENCE_MAX_CHARS=6000
     SHARE_INDEX_MAX_ATTEMPTS=5
 
-配置进入 app/core/config.py 和 .env.example，真实密钥只放部署环境，不提交仓库。依赖增加官方 qdrant-client 和 Google Gen AI SDK，并固定兼容版本。
+配置进入 app/core/config.py 和 .env.example，真实密钥只放部署环境，不提交仓库。依赖使用现有 OpenAI Python SDK 和官方 qdrant-client，并固定兼容版本。
 
-/api/health 增加 qdrant、rag 和 embedding_configured 状态。健康检查可以调用 Qdrant 的轻量接口，但不能实际调用 Gemini，以免消耗额度。Qdrant 或 Gemini 配置异常时应用整体可启动为 degraded；普通无 RAG 生成仍可使用，但新分享发布不可成功。
+/api/health 增加 qdrant、rag 和 embedding_configured 状态。健康检查可以调用 Qdrant 的轻量接口，但不能实际调用 DashScope，以免消耗额度。Qdrant 或 DashScope 配置异常时应用整体可启动为 degraded；普通无 RAG 生成仍可使用，但新分享发布不可成功。
 
 ## 12. 故障处理与补偿
 
-Gemini 调用只对超时、429 和可恢复的 5xx 进行有限次数指数退避；4xx 配置或请求错误不盲目重试。日志只记录模型、耗时、状态码和脱敏错误类型。
+DashScope 调用只对超时、429 和可恢复的 5xx 进行有限次数重试；4xx 配置或请求错误不盲目重试。日志只记录模型、耗时、状态码和脱敏错误类型。
 
 分享 UPSERT 失败时：
 
@@ -421,7 +422,7 @@ Gemini 调用只对超时、429 和可恢复的 5xx 进行有限次数指数退�
 
 ## 13. 安全、隐私与滥用边界
 
-- Gemini API Key、Qdrant API Key、JWT 和数据库密码不得写入日志、响应或快照。
+- DashScope API Key、Qdrant API Key、JWT 和数据库密码不得写入日志、响应或快照。
 - 公开详情只包含用户主动分享的 TripPlan 信息，不公开原始 free_text_input。
 - 所有展示文本按纯文本处理，前端不得直接渲染 HTML。
 - 分享参考作为不可信数据隔离，防止 Prompt Injection。
@@ -450,7 +451,7 @@ Gemini 调用只对超时、429 和可恢复的 5xx 进行有限次数指数退�
 
 - 标准化文本字段顺序、规范化、去重、裁剪和排除规则。
 - 相同文本 hash 稳定，模板或内容变化触发新 hash。
-- Gemini 响应维度、空向量、NaN 和无限值校验。
+- DashScope 响应维度、空向量、NaN 和无限值校验。
 - 分级过滤、候选合并、阈值、归一化和重排公式。
 - Prompt 参考隔离、控制字符清理和恶意指令样例。
 - 分享资格、所有权、重复提交、更新版本和取消分享状态机。
@@ -468,8 +469,8 @@ Gemini 调用只对超时、429 和可恢复的 5xx 进行有限次数指数退�
 ### 15.3 Docker 集成测试
 
 - 使用真实 Qdrant 测试容器验证 Collection、Payload Index、过滤、Cosine 查询、upsert 和删除。
-- Gemini 在 CI 中使用 Fake 或 Mock，不消耗真实额度。
-- 模拟 Gemini 超时、429、5xx、错误维度和 Qdrant 不可用。
+- DashScope 在 CI 中使用 Fake 或 Mock，不消耗真实额度。
+- 模拟 DashScope 超时、429、5xx、错误维度和 Qdrant 不可用。
 - 验证 MySQL 成功而 Qdrant 失败后的补偿恢复。
 - 验证 Qdrant 残留脏 point 被 MySQL 二次校验拦截。
 
@@ -479,7 +480,7 @@ Gemini 调用只对超时、429 和可恢复的 5xx 进行有限次数指数退�
 2. 用户 B 登录后点赞，同一请求重复发送不重复计数。
 3. 用户 B 以相似同城条件生成攻略，召回用户 A 的分享。
 4. 不同城市、已取消分享和低于阈值的攻略不进入参考。
-5. Qdrant 或 Gemini 故障时，普通旅行攻略仍可生成。
+5. Qdrant 或 DashScope 故障时，普通旅行攻略仍可生成。
 6. 分享中包含“忽略系统要求”等文本时，不改变 Planner 的系统约束。
 7. 更新分享后只使用最新 index_version 和快照。
 
@@ -504,6 +505,6 @@ Gemini 调用只对超时、429 和可恢复的 5xx 进行有限次数指数退�
 - SHARE_SQUARE_ENABLED 控制分享广场写入口。
 - RAG_ENABLED 控制生成前检索。
 
-数据库迁移、Qdrant Collection 初始化和 Gemini 配置完成前，不开启分享写入口。已有数据没有自动公开行为，只有用户主动点击分享才会进入知识库。
+数据库迁移、Qdrant Collection 初始化和 DashScope 配置完成前，不开启分享写入口。已有数据没有自动公开行为，只有用户主动点击分享才会进入知识库。
 
 本设计文档只定义已确认方案，不包含功能实现。详细文件级任务、测试先行步骤和验证命令由配套实施计划给出。

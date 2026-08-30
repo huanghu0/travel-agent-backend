@@ -18,9 +18,11 @@ from app.plan_content import (
     plan_content_source_fingerprint,
     restaurant_search_source_fingerprint,
 )
+from app.rag.models import RagContext, RagReference
 from app.routing import plan_route_fingerprint
 from app.schemas.trip_schema import TripPlan, TripPlanResponse, TripRequest
 from app.scheduling import ScheduleTimelineEvaluator
+from app.tools import build_trip_tool_registry
 from tests.auth_test_helpers import TEST_USER
 
 
@@ -109,11 +111,20 @@ class RecordingPlannerAgent:
         self.response = response or make_plan()
         self.repair_responses = list(repair_responses or [make_plan()])
         self.received = None
+        self.received_rag_context = None
         self.repair_received = None
 
-    def generate_plan(self, request, attractions, weather, hotels):
+    def generate_plan(
+        self,
+        request,
+        attractions,
+        weather,
+        hotels,
+        rag_context=None,
+    ):
         self.calls.append((AgentAction.GENERATE_PLAN, request.city))
         self.received = (attractions, weather, hotels)
+        self.received_rag_context = rag_context
         return self.response
 
     def repair_plan(
@@ -140,6 +151,7 @@ def make_orchestrator(
     max_repair_attempts=2,
     max_local_actions_per_step=8,
     validator=None,
+    rag_retriever=None,
 ):
     calls = []
     attraction = RecordingAttractionAgent(calls, attraction_responses)
@@ -150,11 +162,49 @@ def make_orchestrator(
         response=planner_response,
         repair_responses=repair_responses,
     )
+    registry = None
+    if rag_retriever is not None:
+        class RecordingMapProvider:
+            @staticmethod
+            def search_attractions(*, city, keywords):
+                calls.append((AgentAction.SEARCH_ATTRACTIONS, city, keywords))
+                return {
+                    "provider": "amap",
+                    "query_city": city,
+                    "keywords": keywords,
+                    "candidates": [],
+                }
+
+            @staticmethod
+            def get_weather(city):
+                calls.append((AgentAction.GET_WEATHER, city))
+                return {
+                    "provider": "amap",
+                    "query_city": city,
+                    "forecasts": [],
+                }
+
+            @staticmethod
+            def search_hotels(*, city, keywords):
+                calls.append((AgentAction.SEARCH_HOTELS, city))
+                return {
+                    "provider": "amap",
+                    "query_city": city,
+                    "keywords": keywords,
+                    "candidates": [],
+                }
+
+        registry = build_trip_tool_registry(
+            planner_agent=planner,
+            map_provider=RecordingMapProvider(),
+            rag_retriever=rag_retriever,
+        )
     orchestrator = TripOrchestrator(
-        attraction_agent=attraction,
-        weather_agent=weather,
-        hotel_agent=hotel,
-        planner_agent=planner,
+        tool_registry=registry,
+        attraction_agent=attraction if registry is None else None,
+        weather_agent=weather if registry is None else None,
+        hotel_agent=hotel if registry is None else None,
+        planner_agent=planner if registry is None else None,
         validator=validator,
         max_steps=max_steps,
         max_attempts_per_action=max_attempts_per_action,
@@ -236,6 +286,7 @@ class TripOrchestratorTests(unittest.TestCase):
         self.assertTrue(all(record.compressed for record in state.action_history[7:]))
         self.assertEqual(state.session_id, "session-test")
         self.assertEqual(state.trip_plan.city, "成都")
+        self.assertEqual(state.rag_context.reason, "disabled")
         self.assertTrue(state.last_validation_result.valid)
         self.assertEqual(len(state.validation_history), 1)
 
@@ -432,6 +483,72 @@ class TripOrchestratorTests(unittest.TestCase):
         self.assertEqual(
             planner.received,
             (state.attractions, state.weather, state.hotels),
+        )
+
+    def test_generate_plan_stores_injected_rag_context_without_new_action(self):
+        class Retriever:
+            def __init__(self, context):
+                self.context = context
+                self.calls = []
+
+            def retrieve(
+                self,
+                request,
+                *,
+                exclude_session_id=None,
+                selected_attractions=(),
+            ):
+                self.calls.append(
+                    (request.city, exclude_session_id, tuple(selected_attractions))
+                )
+                return self.context
+
+        context = RagContext(
+            attempted=True,
+            used=True,
+            reason="hit",
+            candidate_count=1,
+            references=[
+                RagReference(
+                    share_id="share-1",
+                    title="成都历史路线",
+                    city="成都",
+                    travel_days=2,
+                    transportation="公共交通",
+                    preferences=["历史"],
+                    attraction_names=["武侯祠"],
+                    daily_summaries=["第一天游览历史街区"],
+                    overall_suggestions="提前预约",
+                    vector_score=0.9,
+                    final_score=0.8,
+                )
+            ],
+        )
+        retriever = Retriever(context)
+        orchestrator, _, planner = make_orchestrator(rag_retriever=retriever)
+
+        state = orchestrator.run(make_request(), session_id="rag-session")
+
+        self.assertEqual(retriever.calls, [("成都", "rag-session", ())])
+        self.assertEqual(planner.received_rag_context, context)
+        self.assertEqual(state.rag_context, context)
+        self.assertEqual(state.trip_plan.city, "成都")
+        self.assertEqual(state.llm_call_count, 1)
+        self.assertEqual(
+            [record.action for record in state.action_history],
+            [
+                AgentAction.SEARCH_ATTRACTIONS,
+                AgentAction.GET_WEATHER,
+                AgentAction.SEARCH_HOTELS,
+                AgentAction.GENERATE_PLAN,
+                AgentAction.ESTIMATE_ROUTES,
+                AgentAction.EVALUATE_COMMUTE,
+                AgentAction.SEARCH_RESTAURANTS,
+                AgentAction.REBUILD_PLAN_CONTENT,
+                AgentAction.EVALUATE_CONSTRAINTS,
+                AgentAction.VALIDATE_PLAN,
+                AgentAction.FINISH,
+            ],
         )
 
     def test_invalid_plan_is_repaired_then_validated_again(self):

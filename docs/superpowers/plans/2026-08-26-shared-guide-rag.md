@@ -4,9 +4,9 @@
 
 **Goal:** 在现有 FastAPI 旅行规划后端中增加公开攻略分享、幂等点赞、Docker 自建 Qdrant 索引，以及生成攻略前的同城语义检索增强；RAG 故障时原有生成流程继续工作。
 
-**Architecture:** MySQL 保存分享快照、公开状态、点赞关系和补偿任务，是唯一业务事实来源；应用通过 Gemini `gemini-embedding-2` 生成 768 维向量，Qdrant 仅保存可重建索引。分享发布采用 MySQL 持久化意图、同步向量写入、失败任务补偿；生成链路在既有 `GENERATE_PLAN` 工具内部检索并返回 `GeneratePlanResult`，不增加 Agent 动作，不改变 `TripPlan` 对外结构。
+**Architecture:** MySQL 保存分享快照、公开状态、点赞关系和补偿任务，是唯一业务事实来源；应用通过阿里云百炼 `qwen3.7-text-embedding` 生成 768 维向量，Qdrant 仅保存可重建索引。分享发布采用 MySQL 持久化意图、同步向量写入、失败任务补偿；生成链路在既有 `GENERATE_PLAN` 工具内部检索并返回 `GeneratePlanResult`，不增加 Agent 动作，不改变 `TripPlan` 对外结构。
 
-**Tech Stack:** Python 3.10+、FastAPI、Pydantic 2、SQLAlchemy 2、MySQL 8、Alembic、`google-genai==2.16.0`、`qdrant-client==1.19.0`、Docker Compose、`unittest`、Prometheus。
+**Tech Stack:** Python 3.10+、FastAPI、Pydantic 2、SQLAlchemy 2、MySQL 8、Alembic、`openai==1.109.1`、`qdrant-client==1.19.0`、Docker Compose、`unittest`、Prometheus。
 
 **Design source:** `docs/superpowers/specs/2026-08-26-shared-guide-rag-design.md`
 
@@ -15,14 +15,14 @@
 - 当前提交只包含设计和实施计划。执行本计划时才允许修改功能代码。
 - 严格测试先行：每个行为先写失败测试并确认失败原因正确，再写最小实现，再运行相关回归。
 - 首期每份攻略只有一个整体向量；不得增加每日分块、评论、关注、举报、审核或跨城市召回。
-- `SHARE_SQUARE_ENABLED` 和 `RAG_ENABLED` 默认均为 `false`；迁移、Qdrant 和 Gemini 未准备好时不能意外开启写入口。
+- `SHARE_SQUARE_ENABLED` 和 `RAG_ENABLED` 默认均为 `false`；迁移、Qdrant 和 DashScope 未准备好时不能意外开启写入口。
 - MySQL 是权威来源。任何公开读取和 RAG 候选都必须二次检查 `PUBLIC + READY`、`index_version` 和 `content_hash`。
-- 公开快照不得包含 `free_text_input`、用户 ID、Token、点赞用户、内部错误或 AgentState；Gemini 输入不得包含这些数据。
+- 公开快照不得包含 `free_text_input`、用户 ID、Token、点赞用户、内部错误或 AgentState；DashScope 输入不得包含这些数据。
 - 分享成功响应意味着该记录已经是 `PUBLIC + READY` 且 Qdrant point 已写入。同步失败必须返回可重试错误，记录保持不可见并由任务补偿。
 - 取消分享先在 MySQL 变为不可见，再尝试删除 Qdrant；删除失败不影响业务不可见性。
 - 当前请求和实时高德数据优先于历史分享；分享内容一律作为不可信 JSON 数据，不能覆盖指令。
 - 不更改现有 `AgentAction` 数量或顺序；普通草稿修复不重新检索。
-- 单元测试不得访问真实 Gemini、Qdrant 或公网。真实 MySQL/Qdrant 测试使用显式环境开关。
+- 单元测试不得访问真实 DashScope、Qdrant 或公网。真实 MySQL/Qdrant 测试使用显式环境开关。
 - 每个任务完成后运行列出的测试并提交；不要把多个任务压成一个不可审查的大提交。
 
 ## Locked Contracts
@@ -214,7 +214,7 @@ POST/PUT 请求体统一为 `ShareGuideRequest(title: str | None)`，标题去�
 - `tests/test_shared_guide_api.py`
 - `tests/test_share_index_worker.py`
 - `tests/test_rag_text_builder.py`
-- `tests/test_gemini_embedding.py`
+- `tests/test_dashscope_embedding.py`
 - `tests/test_qdrant_index.py`
 - `tests/test_rag_retrieval.py`
 - `tests/test_rag_runtime.py`
@@ -266,7 +266,7 @@ Add tests that reload `app.core.config` under patched environment values and ass
 - `EMBEDDING_DIMENSION == 768`, `RAG_TOP_K == 3`, `RAG_MAX_TOP_K == 5`;
 - `RAG_TOP_K > RAG_MAX_TOP_K`, a dimension other than 768, non-positive timeouts, and `RAG_MIN_SCORE` outside `[-1, 1]` are rejected by `validate_rag_settings()`;
 - `SHARE_INDEX_LEASE_SECONDS` must be greater than `EMBEDDING_TIMEOUT_SECONDS * EMBEDDING_MAX_ATTEMPTS + QDRANT_TIMEOUT_SECONDS + 30`;
-- when either feature flag is enabled, missing Qdrant URL, collection, or Gemini key yields a degraded configuration result instead of raising during module import.
+- when either feature flag is enabled, missing Qdrant URL, collection, DashScope key, or DashScope Base URL yields a degraded configuration result instead of raising during module import.
 
 Run:
 
@@ -281,7 +281,7 @@ Expected: FAIL because the RAG settings and validator do not exist.
 Append to `requirements.txt`:
 
 ```text
-google-genai==2.16.0
+openai==1.109.1
 qdrant-client==1.19.0
 ```
 
@@ -289,7 +289,7 @@ With the project virtual environment activated, install and verify the pins:
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m pip show google-genai
+python -m pip show openai
 python -m pip show qdrant-client
 ```
 
@@ -306,8 +306,9 @@ QDRANT_URL=http://127.0.0.1:6333
 QDRANT_API_KEY=
 QDRANT_COLLECTION=shared_guide_embeddings_v1
 QDRANT_TIMEOUT_SECONDS=5
-GEMINI_EMBEDDING_API_KEY=
-EMBEDDING_MODEL=gemini-embedding-2
+DASHSCOPE_API_KEY=
+DASHSCOPE_BASE_URL=
+EMBEDDING_MODEL=qwen3.7-text-embedding
 EMBEDDING_DIMENSION=768
 EMBEDDING_TIMEOUT_SECONDS=10
 EMBEDDING_MAX_ATTEMPTS=3
@@ -672,18 +673,18 @@ git add app/rag app/sharing/models.py tests/test_rag_text_builder.py
 git commit -m "feat: build canonical rag retrieval text"
 ```
 
-## Task 6: Implement the Gemini embedding boundary
+## Task 6: Implement the DashScope embedding boundary
 
 **Files:**
 
 - Create: `app/rag/embedding.py`
-- Create: `tests/test_gemini_embedding.py`
+- Create: `tests/test_dashscope_embedding.py`
 
 - [ ] **Step 1: Write failing client-boundary tests**
 
-Inject a fake Gen AI client and assert:
+Inject a fake OpenAI-compatible client and assert:
 
-- `models.embed_content` receives model `gemini-embedding-2`, one string content, and `EmbedContentConfig(output_dimensionality=768)`;
+- `embeddings.create` receives model `qwen3.7-text-embedding`, one string input, and `dimensions=768`;
 - valid 768 finite floats are returned;
 - missing embeddings, empty values, wrong dimensions, `NaN`, `Infinity`, and non-numeric values raise `InvalidEmbeddingError`;
 - timeout/429/retryable 5xx map to `EmbeddingUnavailableError` without leaking request text or API key;
@@ -693,7 +694,7 @@ Inject a fake Gen AI client and assert:
 Run:
 
 ```powershell
-python -m unittest tests.test_gemini_embedding -v
+python -m unittest tests.test_dashscope_embedding -v
 ```
 
 Expected: FAIL because the client does not exist.
@@ -703,8 +704,8 @@ Expected: FAIL because the client does not exist.
 Constructor:
 
 ```python
-GeminiEmbeddingClient(
-    *, api_key: str, model: str, dimension: int,
+DashScopeEmbeddingClient(
+    *, api_key: str, base_url: str, model: str, dimension: int,
     timeout_seconds: float, max_attempts: int,
     client: Any | None = None,
 )
@@ -713,29 +714,22 @@ GeminiEmbeddingClient(
 When no client is injected, create:
 
 ```python
-genai.Client(
+OpenAI(
     api_key=api_key,
-    http_options=types.HttpOptions(
-        timeout=int(timeout_seconds * 1000),
-        retry_options=types.HttpRetryOptions(
-            attempts=max_attempts,
-            initial_delay=1.0,
-            max_delay=8.0,
-            exp_base=2.0,
-            http_status_codes=[429, 500, 502, 503, 504],
-        ),
-    ),
+    base_url=base_url,
+    timeout=timeout_seconds,
+    max_retries=max(0, max_attempts - 1),
 )
 ```
 
-Call `client.models.embed_content(model=self.model, contents=text, config=types.EmbedContentConfig(output_dimensionality=self.dimension))`, read `response.embeddings[0].values`, convert to floats, then validate exact length and `math.isfinite()` for every element. Error messages may include a provider status code but never input text or secrets.
+Call `client.embeddings.create(model=self.model, input=text, dimensions=self.dimension)`, read `response.data[0].embedding`, convert to floats, then validate exact length and `math.isfinite()` for every element. Error messages may include a provider status code but never input text or secrets.
 
 - [ ] **Step 3: Run tests and commit**
 
 ```powershell
-python -m unittest tests.test_gemini_embedding -v
-git add app/rag/embedding.py tests/test_gemini_embedding.py
-git commit -m "feat: add gemini embedding client"
+python -m unittest tests.test_dashscope_embedding -v
+git add app/rag/embedding.py tests/test_dashscope_embedding.py
+git commit -m "feat: add dashscope embedding client"
 ```
 
 ## Task 7: Implement the Qdrant collection and vector index adapter
@@ -834,7 +828,7 @@ Cover the full state machine:
 - `TripDraftService.ensure_original_version(state)` supplies the current confirmed version when none was explicitly created;
 - snapshot excludes private request fields and is deep-copied;
 - default title is `"{city_normalized}{travel_days}日旅行攻略"`;
-- create stages MySQL, claims the exact job with a `sync:<uuid>` lease, then calls Gemini/Qdrant;
+- create stages MySQL, claims the exact job with a `sync:<uuid>` lease, then calls DashScope/Qdrant;
 - success calls embedding once, upserts once, then marks `PUBLIC + READY`;
 - identical repeated POST returns the existing ready record without another embedding call;
 - changed source content through POST raises conflict and requires PUT;
@@ -842,7 +836,7 @@ Cover the full state machine:
 - PUT on an unpublished record conflicts and instructs the caller to use the session share endpoint;
 - PUT preserves `share_id`, `created_at`, and likes, resets `published_at`, increments `index_version`, temporarily hides the record, and uses the latest confirmed version;
 - if unpublish/update supersedes an UPSERT while its external call is in flight, failed compare-and-set triggers a best-effort version-filtered cleanup and cannot re-expose the share;
-- Gemini/Qdrant failure marks the exact version failed, leaves the retry job, and raises `SharedGuideUnavailableError`;
+- DashScope/Qdrant failure marks the exact version failed, leaves the retry job, and raises `SharedGuideUnavailableError`;
 - DELETE hides first, then deletes point; delete failure still returns success and leaves compensation state;
 - repeated DELETE is a successful no-op and creates no additional DELETE job;
 - cross-user update/delete returns not found, not forbidden.
@@ -1007,7 +1001,7 @@ List item fields: `share_id`, title, `author_username`, city, days, transport, p
 
 Use `APIRouter(tags=["shared-guides"])`. Map domain errors consistently: invalid cursor 400, self-like 403, not found/cross-owner 404, conflict 409, disabled/degraded sharing 503. Do not accept identity from request bodies.
 
-Declare handlers with normal `def`, not `async def`, because the current SQLAlchemy stores and Gemini/Qdrant clients are synchronous; FastAPI will execute them in its threadpool instead of blocking the event loop.
+Declare handlers with normal `def`, not `async def`, because the current SQLAlchemy stores and DashScope/Qdrant clients are synchronous; FastAPI will execute them in its threadpool instead of blocking the event loop.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -1197,11 +1191,11 @@ Cover:
 
 - both feature flags off creates a no-op retriever, no worker, and no external clients;
 - with a MySQL store present, public GET routes remain readable when `SHARE_SQUARE_ENABLED=false`, while share/update/unpublish/like writes return 503;
-- either feature flag being true may require the shared Gemini/Qdrant clients; `RAG_ENABLED=false` alone must not disable indexing for enabled sharing;
+- either feature flag being true may require the shared DashScope/Qdrant clients; `RAG_ENABLED=false` alone must not disable indexing for enabled sharing;
 - invalid/missing config yields `degraded`, app construction succeeds, RAG generation remains available through no-op, and share writes return unavailable;
 - valid config initializes collection exactly once and exposes ready status;
 - schema mismatch degrades only RAG/sharing;
-- health check calls a lightweight Qdrant operation but never Gemini;
+- health check calls a lightweight Qdrant operation but never DashScope;
 - lifespan starts/stops the share worker once and honors shutdown timeout;
 - `/api/health` includes `qdrant`, `rag`, and `embedding_configured` while retaining existing Redis fields;
 - router is registered only with a real MySQL shared store; disabled write routes return 503 rather than crashing.
@@ -1220,12 +1214,12 @@ Create a dataclass containing `retriever`, optional embedding/index, health stat
 
 - disabled flags: no SDK clients, status `disabled`;
 - enabled but validation/store failure: no-op retriever, status `degraded` with sanitized reasons;
-- valid: construct Gemini and Qdrant clients, run `ensure_collection()`, construct retriever, status `ready`;
+- valid: construct DashScope and Qdrant clients, run `ensure_collection()`, construct retriever, status `ready`;
 - later Qdrant failures update health state but do not crash the process.
 
 Create `ShareIndexWorker` only when the shared store and both external adapters are ready, `SHARE_INDEX_WORKER_ENABLED=true`, and at least one of the two feature flags is enabled. `RAG_ENABLED=false` still returns a `NoOpRagRetriever`, even when the same ready adapters are being used for sharing.
 
-The lightweight health probe uses public `QdrantClient.get_collections()` with the configured timeout. It never calls Gemini; `embedding_configured` only reports whether model/dimension/key configuration passed validation.
+The lightweight health probe uses public `QdrantClient.get_collections()` with the configured timeout. It never calls DashScope; `embedding_configured` only reports whether model/dimension/key/Base URL configuration passed validation.
 
 - [ ] **Step 3: Wire dependencies in `main.py` in this order**
 
@@ -1285,7 +1279,7 @@ Test command parsers and injected fakes without network access:
 - reconcile reports missing, stale, and extra points separately;
 - fixed evaluation calculates Recall@3, nDCG@3, same-city correctness, cancelled-share recall, and latency summary;
 - end-to-end fake scenario covers share → anonymous read → like → similar retrieval → planner context;
-- Qdrant/Gemini outage still returns a generated TripPlan;
+- Qdrant/DashScope outage still returns a generated TripPlan;
 - cancelled and stale-index shares never enter context;
 - malicious content cannot remove prompt constraints.
 
@@ -1305,7 +1299,7 @@ CLI contract:
 python scripts/reindex_shared_guides.py [--apply] [--batch-size 100] [--share-id UUID]
 ```
 
-Dry-run validates configuration and reports selected records without calling Gemini or changing MySQL/Qdrant. Apply mode processes bounded batches and regenerates canonical text。若 hash 与持久化值相同，直接以相同 `index_version` 重建 point 且不改变公开状态；若 hash 不同，则通过正常更新状态机递增版本、暂时隐藏并重新发布。One failure is recorded and processing continues; exit non-zero if any apply operation failed.
+Dry-run validates configuration and reports selected records without calling DashScope or changing MySQL/Qdrant. Apply mode processes bounded batches and regenerates canonical text。若 hash 与持久化值相同，直接以相同 `index_version` 重建 point 且不改变公开状态；若 hash 不同，则通过正常更新状态机递增版本、暂时隐藏并重新发布。One failure is recorded and processing continues; exit non-zero if any apply operation failed.
 
 - [ ] **Step 3: Implement safe reconcile command**
 
@@ -1319,7 +1313,7 @@ Use paginated MySQL reads and Qdrant scroll. Missing/stale points are repaired o
 
 - [ ] **Step 4: Add fixed retrieval evaluation fixtures**
 
-`corpus.json` contains synthetic public snapshot metadata for at least Beijing, Shanghai, Hangzhou, Chengdu, and Xi'an across 1/3/5 days and walking/public-transit/driving. `queries.json` contains query IDs, request dimensions, expected relevant share IDs, and a frozen semantic score matrix so CI does not call Gemini. `manifest.json` 固定 fixture 版本、样本数量、最低 Recall@3 和 nDCG@3 阈值。
+`corpus.json` contains synthetic public snapshot metadata for at least Beijing, Shanghai, Hangzhou, Chengdu, and Xi'an across 1/3/5 days and walking/public-transit/driving. `queries.json` contains query IDs, request dimensions, expected relevant share IDs, and a frozen semantic score matrix so CI does not call DashScope. `manifest.json` 固定 fixture 版本、样本数量、最低 Recall@3 和 nDCG@3 阈值。
 
 The runner emits JSON and exits non-zero unless:
 
@@ -1328,7 +1322,7 @@ The runner emits JSON and exits non-zero unless:
 - Recall@3 and nDCG@3 meet thresholds recorded in fixture manifest;
 - configured `RAG_MIN_SCORE` is included in the report.
 
-Add an optional `--live-gemini` mode for manual calibration that reads the key from environment, never writes embeddings to fixtures automatically, and prints the recommended threshold separately for human review.
+Add an optional `--live-dashscope` mode for manual calibration that reads the key and Base URL from environment, never writes embeddings to fixtures automatically, and prints the recommended threshold separately for human review.
 
 - [ ] **Step 5: Write operations documentation**
 
@@ -1341,7 +1335,7 @@ Document:
 - rollback sequence: disable flags first, keep MySQL data, then stop Qdrant;
 - worker backlog/failure diagnosis and safe retry;
 - v2 collection migration for future model/dimension changes;
-- Gemini free-tier privacy limitation and secret-handling rules.
+- DashScope service-tier privacy and secret-handling rules.
 
 - [ ] **Step 6: Add deterministic evaluation to the quality gate**
 
@@ -1398,8 +1392,8 @@ git commit -m "test: complete shared guide rag acceptance"
 - [ ] Unpublishing removes the share from API and RAG immediately even if Qdrant delete fails.
 - [ ] Same-city is never relaxed; different-city, stale, cancelled, and below-threshold guides are absent.
 - [ ] Planner receives at most configured Top-K references within the character budget and keeps live data/request priority.
-- [ ] Gemini/Qdrant failures do not fail ordinary trip generation.
-- [ ] Public/Gemini/log payload inspections show no private text, author ID, auth token, or secret.
+- [ ] DashScope/Qdrant failures do not fail ordinary trip generation.
+- [ ] Public/DashScope/log payload inspections show no private text, author ID, auth token, or secret.
 - [ ] Existing planning, authentication, ownership, drafts, async tasks, MySQL, and Redis tests pass.
 - [ ] Offline retrieval report records the tested threshold and passes the locked filtering metrics.
 - [ ] `git status --short` shows only intentional changes before final integration.

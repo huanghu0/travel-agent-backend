@@ -8,7 +8,7 @@ import unittest
 from datetime import timedelta
 from uuid import uuid4
 
-from sqlalchemy import delete, update
+from sqlalchemy import delete, func, select, update
 
 from app.agent_runtime import AgentState, TripOrchestrator
 from app.core.config import settings
@@ -18,10 +18,15 @@ from app.persistence.mysql_restaurant_cache import MySQLRestaurantCache
 from app.persistence.mysql_route_cache import MySQLRouteCache
 from app.persistence.mysql_trip_task_store import MySQLTripTaskStore
 from app.persistence.mysql_trip_version_store import MySQLTripVersionStore
+from app.sharing.models import IndexOperation, SharePublishDraft, SharedGuideSnapshot, SharedTripRequestSnapshot
+from app.sharing.mysql_store import MySQLSharedGuideStore
 from app.persistence.sqlalchemy_models import (
     AgentSessionRow,
     RestaurantCacheRow,
     RouteCacheRow,
+    ShareIndexJobRow,
+    SharedGuideLikeRow,
+    SharedGuideRow,
     TripDraftRow,
     TripPlanningTaskRow,
     TripPlanVersionRow,
@@ -128,6 +133,39 @@ def make_completed_state() -> AgentState:
     )
 
 
+def make_shared_draft(user_id: str, session_id: str) -> SharePublishDraft:
+    return SharePublishDraft(
+        author_user_id=user_id,
+        source_session_id=session_id,
+        source_version_id=str(uuid4()),
+        source_version_number=1,
+        title="杭州一日攻略",
+        city="杭州",
+        city_normalized="hangzhou",
+        travel_days=1,
+        transportation="transit",
+        accommodation="hotel",
+        preferences=["自然风光"],
+        snapshot=SharedGuideSnapshot(
+            request=SharedTripRequestSnapshot(
+                city="杭州",
+                travel_days=1,
+                transportation="transit",
+                accommodation="hotel",
+                preferences=["自然风光"],
+            ),
+            trip_plan=make_plan(),
+        ),
+        retrieval_text="杭州一日自然风光攻略",
+        content_hash="a" * 64,
+        quality_level="excellent",
+        quality_score=95,
+        embedding_model="qwen3.7-text-embedding",
+        embedding_dimension=768,
+        retrieval_template_version="retrieval_template_v1",
+    )
+
+
 @unittest.skipUnless(RUN_MYSQL_TESTS, "设置 RUN_MYSQL_INTEGRATION_TESTS=1 后运行真实 MySQL Store 测试")
 class MySQLStoreIntegrationTests(unittest.TestCase):
     @classmethod
@@ -150,6 +188,9 @@ class MySQLStoreIntegrationTests(unittest.TestCase):
         # 按外键依赖逆序清空测试库，绝不触碰开发库和 SQLite 数据。
         with self.engine.begin() as connection:
             for table in (
+                ShareIndexJobRow.__table__,
+                SharedGuideLikeRow.__table__,
+                SharedGuideRow.__table__,
                 TripTaskEventRow.__table__,
                 TripPlanningTaskRow.__table__,
                 TripDraftRow.__table__,
@@ -160,6 +201,96 @@ class MySQLStoreIntegrationTests(unittest.TestCase):
                 UserRow.__table__,
             ):
                 connection.execute(delete(table))
+
+    def test_shared_guide_transactional_store_contract(self) -> None:
+        user_id = str(uuid4())
+        now = utc_now()
+        with self.engine.begin() as connection:
+            connection.execute(
+                UserRow.__table__.insert().values(
+                    user_id=user_id,
+                    username="share-author",
+                    password_hash="unused",
+                    created_at=now.replace(tzinfo=None),
+                )
+            )
+        store = MySQLSharedGuideStore(self.engine)
+        intent = store.create_publish_intent(make_shared_draft(user_id, str(uuid4())), now=now)
+        claimed = store.claim_index_job(
+            intent.job.job_id,
+            "mysql-worker",
+            now=now,
+            lease_seconds=30,
+        )
+        self.assertIsNotNone(claimed)
+        self.assertTrue(
+            store.complete_index_operation(
+                intent.job.job_id,
+                intent.record.share_id,
+                intent.record.index_version,
+                IndexOperation.UPSERT,
+                worker_id="mysql-worker",
+                now=now + timedelta(seconds=1),
+            )
+        )
+        detail = store.get_public(intent.record.share_id)
+        self.assertEqual(detail.author_username, "share-author")
+
+    def test_shared_guide_like_concurrency_keeps_relation_count_in_sync(self) -> None:
+        author_id = str(uuid4())
+        liker_id = str(uuid4())
+        now = utc_now()
+        with self.engine.begin() as connection:
+            connection.execute(
+                UserRow.__table__.insert(),
+                [
+                    {"user_id": author_id, "username": "like-author", "password_hash": "unused", "created_at": now.replace(tzinfo=None)},
+                    {"user_id": liker_id, "username": "like-user", "password_hash": "unused", "created_at": now.replace(tzinfo=None)},
+                ],
+            )
+        store = MySQLSharedGuideStore(self.engine)
+        intent = store.create_publish_intent(make_shared_draft(author_id, str(uuid4())), now=now)
+        store.claim_index_job(intent.job.job_id, "mysql-like-worker", now=now, lease_seconds=30)
+        self.assertTrue(store.complete_index_operation(intent.job.job_id, intent.record.share_id, intent.record.index_version, IndexOperation.UPSERT, worker_id="mysql-like-worker", now=now + timedelta(seconds=1)))
+
+        def run_concurrently(operation) -> None:
+            barrier = threading.Barrier(3)
+            errors: list[BaseException] = []
+
+            def execute() -> None:
+                try:
+                    barrier.wait()
+                    operation()
+                except BaseException as exc:  # pragma: no cover - asserted after threads join
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=execute), threading.Thread(target=execute)]
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            for thread in threads:
+                thread.join(timeout=15)
+            self.assertEqual(errors, [])
+
+        run_concurrently(lambda: store.put_like(intent.record.share_id, liker_id, now=now))
+        with self.engine.connect() as connection:
+            like_rows = connection.execute(
+                select(func.count()).select_from(SharedGuideLikeRow.__table__).where(
+                    SharedGuideLikeRow.share_id == intent.record.share_id
+                )
+            ).scalar_one()
+        self.assertEqual(like_rows, 1)
+        self.assertEqual(store.get_owned(intent.record.share_id, author_id).like_count, like_rows)
+
+        run_concurrently(lambda: store.delete_like(intent.record.share_id, liker_id))
+        with self.engine.connect() as connection:
+            like_rows = connection.execute(
+                select(func.count()).select_from(SharedGuideLikeRow.__table__).where(
+                    SharedGuideLikeRow.share_id == intent.record.share_id
+                )
+            ).scalar_one()
+        self.assertEqual(like_rows, 0)
+        self.assertEqual(store.get_owned(intent.record.share_id, author_id).like_count, like_rows)
 
     def test_agent_state_route_restaurant_and_version_contracts(self) -> None:
         state_store = MySQLAgentStateStore(self.engine)

@@ -8,7 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response, StreamingResponse
 
-from app.auth.dependencies import build_current_user_dependency
+from app.auth.dependencies import (
+    build_current_user_dependency,
+    build_optional_current_user_dependency,
+)
 from app.auth.models import User
 from app.auth.router import build_auth_router
 from app.auth.security import JwtCodec, PasswordSecurity
@@ -45,6 +48,7 @@ from app.infrastructure.redis.rate_limit import (
     RedisRateLimiter,
 )
 from app.observability import RedisObservabilityConfig, RedisRuntimeObservability
+from app.observability.rag_metrics import rag_metrics
 from app.providers.amap.business_cache import AmapBusinessCache
 from app.providers.amap.client import AmapClient, AmapProviderClient
 from app.providers.amap.layered_cache import (
@@ -76,7 +80,11 @@ from app.schemas.trip_draft_schema import (
     TripDraftUpdate,
     TripPlanVersion,
 )
+from app.rag.runtime import RagRuntime
+from app.rag.text_builder import EmbeddingTextBuilder
 from app.services import TripDraftService
+from app.sharing.router import build_shared_guide_router
+from app.sharing.service import SharedGuideService
 from app.task_runtime import (
     TripPlanningTask,
     TripTaskCancelResponse,
@@ -145,9 +153,11 @@ async def lifespan(_: FastAPI):
     redis_observability.start()
     if settings.TRIP_TASK_WORKER_ENABLED:
         trip_task_worker.start()
+    rag_runtime.start()
     try:
         yield
     finally:
+        rag_runtime.stop()
         if settings.TRIP_TASK_WORKER_ENABLED:
             trip_task_worker.stop()
         task_notification_bus.stop()
@@ -175,9 +185,7 @@ app.add_middleware(
 )
 
 # 初始化规划智能体、持久化 Store 和确定性编排器（单例）。
-# 步骤 1：PlannerAgent 只负责“生成行程”和“修复行程”，这两个步骤才会调用 LLM。
-planner_agent = PlannerAgent()
-# 步骤 2：统一工厂根据 DATABASE_BACKEND 创建 Store；业务层不再直接依赖 SQLite。
+# 步骤 1：统一工厂根据 DATABASE_BACKEND 创建 Store；业务层不再直接依赖 SQLite。
 persistence_stores = create_persistence_stores(
     backend=settings.DATABASE_BACKEND,
     sqlite_database_path=settings.AGENT_MEMORY_DB_PATH,
@@ -201,11 +209,18 @@ if persistence_stores.user_store is not None and settings.JWT_SECRET_KEY:
         # lifespan 会给出统一且不包含密钥内容的配置错误。
         auth_service = None
 current_user_dependency = build_current_user_dependency(auth_service)
+optional_current_user_dependency = build_optional_current_user_dependency(auth_service)
 app.include_router(build_auth_router(auth_service, current_user_dependency))
 agent_state_store = persistence_stores.agent_state_store
 trip_version_store = persistence_stores.trip_version_store
 route_cache_l2 = persistence_stores.route_cache
 restaurant_cache_l2 = persistence_stores.restaurant_cache
+shared_guide_store = persistence_stores.shared_guide_store
+# 步骤 2：RAG 与分享索引共享可选 DashScope/Qdrant 适配器；失败时只降级该边界。
+rag_runtime = RagRuntime.from_settings(
+    settings=settings,
+    shared_store=shared_guide_store,
+)
 # 步骤 3：为高德路线和餐饮建立 Redis L1 → 数据库 L2 分层缓存。
 # Redis 关闭或故障时由 NoOp/降级结果自动绕过，MySQL/SQLite L2 仍可继续工作。
 route_cache = (
@@ -250,11 +265,13 @@ amap_provider = AmapProviderClient(
     business_cache=amap_business_cache,
 )
 # 步骤 5：注册工具白名单。景点、天气、酒店直接调用高德，不经过 LLM。
+planner_agent = PlannerAgent()
 trip_tool_registry = build_trip_tool_registry(
     planner_agent=planner_agent,
     map_provider=amap_provider,
     route_cache=route_cache,
     restaurant_cache=restaurant_cache,
+    rag_retriever=rag_runtime.retriever,
 )
 # 步骤 6：编排器负责按固定状态机循环执行，并统一应用预算、重试和熔断策略。
 trip_orchestrator = TripOrchestrator(
@@ -382,6 +399,49 @@ trip_draft_service = TripDraftService(
     orchestrator=trip_orchestrator,
 )
 
+# 步骤 7：只有 MySQL 事实 Store 存在时才暴露分享路由。关闭功能或适配器
+# 降级时仍保留公开读取，所有写操作由服务边界统一返回 503。
+shared_guide_service: SharedGuideService | None = None
+if shared_guide_store is not None and settings.DATABASE_BACKEND == "mysql":
+    share_max_limit = settings.SHARE_LIST_MAX_LIMIT
+    if (
+        not isinstance(share_max_limit, int)
+        or isinstance(share_max_limit, bool)
+        or share_max_limit < 1
+    ):
+        share_max_limit = 50
+    share_default_limit = settings.SHARE_LIST_DEFAULT_LIMIT
+    if (
+        not isinstance(share_default_limit, int)
+        or isinstance(share_default_limit, bool)
+        or share_default_limit < 1
+        or share_default_limit > share_max_limit
+    ):
+        share_default_limit = min(20, share_max_limit)
+    shared_guide_service = SharedGuideService(
+        state_store=agent_state_store,
+        trip_draft_service=trip_draft_service,
+        store=shared_guide_store,
+        text_builder=EmbeddingTextBuilder(),
+        embedding_client=rag_runtime.embedding_client,
+        vector_index=rag_runtime.vector_index,
+        write_enabled=bool(settings.SHARE_SQUARE_ENABLED and rag_runtime.ready),
+        lease_seconds=settings.SHARE_INDEX_LEASE_SECONDS,
+        max_attempts=settings.SHARE_INDEX_MAX_ATTEMPTS,
+        retry_base_seconds=settings.SHARE_INDEX_RETRY_BASE_SECONDS,
+        retry_max_seconds=settings.SHARE_INDEX_RETRY_MAX_SECONDS,
+        metrics=rag_metrics,
+    )
+    app.include_router(
+        build_shared_guide_router(
+            shared_guide_service,
+            current_user_dependency,
+            optional_current_user_dependency,
+            default_list_limit=share_default_limit,
+            max_list_limit=share_max_limit,
+        )
+    )
+
 
 # 阶段五：任务元数据与 SSE 事件使用同一持久化后端，独立于 AgentState 检查点。
 # 通知装饰器只在数据库事务提交成功后发布 Redis 消息，发布失败不会覆盖写库结果。
@@ -425,6 +485,7 @@ redis_observability = RedisRuntimeObservability(
         settings.TRIP_TASK_NOTIFICATION_SSE_FALLBACK_POLL_SECONDS
     ),
 )
+redis_observability.registry.register(rag_metrics)
 
 
 _STAGE_NAMES = {
@@ -1123,10 +1184,11 @@ def redis_observability_snapshot():
 def health_check():
     # Redis 是非关键组件：不可用时报告 degraded，但主服务继续通过健康检查。
     snapshot = redis_observability.snapshot()
+    rag_health = rag_runtime.health_snapshot(probe=True)
     return {
         "status": "ok",
         "message": "旅行助手服务运行正常",
-        "degraded": snapshot["degraded"],
+        "degraded": bool(snapshot["degraded"] or rag_health["status"] == "degraded"),
         "components": {
             "redis": snapshot["health"],
             "redis_client": snapshot["client_metrics"],
@@ -1142,6 +1204,9 @@ def health_check():
                 "amap_business": snapshot["amap_business_cache_metrics"],
             },
             "provider_quota": snapshot["provider_quota_metrics"],
+            "qdrant": rag_health["qdrant"],
+            "rag": rag_health["rag"],
+            "embedding_configured": rag_health["embedding_configured"],
         },
     }
 

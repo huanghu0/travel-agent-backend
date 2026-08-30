@@ -24,6 +24,7 @@ from app.constraints import (
     TripConstraintReport,
 )
 from app.plan_content import ContentRefillCandidate
+from app.rag.models import RagContext
 from app.routing import RouteOptimizationCandidate, RouteQualityReport
 from app.schemas.trip_schema import TripPlan, TripRequest
 from app.scheduling import ScheduleOptimizationCandidate, ScheduleQualityReport
@@ -31,7 +32,7 @@ from app.tools.models import ActionResult, ToolErrorType
 from app.validation import TripValidationResult
 
 
-CURRENT_AGENT_STATE_VERSION = 16
+CURRENT_AGENT_STATE_VERSION = 17
 
 
 def utc_now() -> datetime:
@@ -344,6 +345,7 @@ class AgentState(BaseModel):
     attractions: dict[str, Any] | None = None
     weather: dict[str, Any] | None = None
     hotels: dict[str, Any] | None = None
+    rag_context: RagContext | None = None
     # 最终行程锚点周边的真实高德餐厅候选。
     restaurants: dict[str, Any] | None = None
     restaurant_plan_fingerprint: str | None = None
