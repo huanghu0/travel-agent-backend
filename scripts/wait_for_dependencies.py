@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import socket
 import sys
@@ -54,9 +55,11 @@ def wait_for_dependencies(
 ) -> bool:
     """Poll named probes within one shared deadline and emit sanitized state only."""
 
-    if timeout_seconds <= 0:
+    timeout_seconds = float(timeout_seconds)
+    poll_interval_seconds = float(poll_interval_seconds)
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
-    if poll_interval_seconds <= 0:
+    if not math.isfinite(poll_interval_seconds) or poll_interval_seconds <= 0:
         raise ValueError("poll_interval_seconds must be positive")
     output = output or sys.stdout
     error_output = error_output or sys.stderr
@@ -64,17 +67,16 @@ def wait_for_dependencies(
     pending = dict(probes)
 
     while pending:
-        remaining = deadline - monotonic()
-        if remaining <= 0:
-            print(
-                "dependency_wait status=timeout pending="
-                + ",".join(sorted(pending)),
-                file=error_output,
-            )
-            return False
-
-        probe_timeout = min(PROBE_TIMEOUT_SECONDS, max(0.1, remaining))
         for name, probe in tuple(pending.items()):
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                print(
+                    "dependency_wait status=timeout pending="
+                    + ",".join(sorted(pending)),
+                    file=error_output,
+                )
+                return False
+            probe_timeout = min(PROBE_TIMEOUT_SECONDS, remaining)
             try:
                 ready = bool(probe(probe_timeout))
             except Exception:
@@ -107,7 +109,7 @@ def _mysql_port() -> int:
 
 def _wait_timeout() -> float:
     value = float(_required_text("DEPENDENCY_WAIT_TIMEOUT_SECONDS", "60"))
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise ValueError("DEPENDENCY_WAIT_TIMEOUT_SECONDS must be positive")
     return min(value, MAX_WAIT_SECONDS)
 
