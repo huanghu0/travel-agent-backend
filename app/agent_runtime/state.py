@@ -240,6 +240,7 @@ class ConstraintOptimizationRecord(BaseModel):
 
 ContentRefillStatus = Literal[
     "not_started",
+    "supplement_needed",
     "candidate_pending",
     "completed",
     "skipped",
@@ -424,6 +425,10 @@ class AgentState(BaseModel):
     content_refill_baseline_route_fingerprint: str | None = None
     content_refill_baseline_constraint_fingerprint: str | None = None
     content_refill_excluded_identities: list[str] = Field(default_factory=list)
+    content_refill_supplement_search_count: int = Field(default=0, ge=0)
+    content_refill_supplement_history: list[CommuteSupplementRecord] = Field(
+        default_factory=list
+    )
     content_refill_history: list[ContentRefillRecord] = Field(default_factory=list)
     plan_consistency_fingerprint: str | None = None
     plan_consistency_rebuild_count: int = Field(default=0, ge=0)

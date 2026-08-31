@@ -424,6 +424,38 @@ class SharedGuideApiTests(unittest.TestCase):
                 self.assertNotIn("provider secret", response.text)
         self.service.failure = None
 
+    def test_known_share_conflicts_return_actionable_safe_messages(self):
+        cases = (
+            ("only completed trips can be shared", "只有已完成的行程才能分享"),
+            ("the trip has no complete confirmed version", "行程尚无可分享的已确认版本"),
+            ("the latest trip version is not confirmed", "行程尚无可分享的已确认版本"),
+            ("the trip has no complete confirmed snapshot", "行程尚无可分享的已确认版本"),
+            ("the publish operation is already in progress", "分享正在处理中，请稍后重试"),
+        )
+        for reason, expected_detail in cases:
+            with self.subTest(reason=reason):
+                self.service.failure = SharedGuideConflictError(reason)
+                response = self.client.post(
+                    "/api/trip/sessions/session-1/share",
+                    headers=self.auth(),
+                    json={},
+                )
+                self.assertEqual(409, response.status_code)
+                self.assertEqual(expected_detail, response.json()["detail"])
+        self.service.failure = None
+
+    def test_unknown_share_conflict_does_not_leak_internal_detail(self):
+        self.service.failure = SharedGuideConflictError("provider secret conflict")
+        response = self.client.post(
+            "/api/trip/sessions/session-1/share",
+            headers=self.auth(),
+            json={},
+        )
+        self.assertEqual(409, response.status_code)
+        self.assertEqual("分享操作冲突", response.json()["detail"])
+        self.assertNotIn("provider secret", response.text)
+        self.service.failure = None
+
     def test_unpublish_is_empty_204_and_owned_projection_sanitizes_index_error(self):
         deleted = self.client.delete("/api/shared-guides/share-1", headers=self.auth())
         owned = self.client.get("/api/users/me/shared-guides", headers=self.auth())

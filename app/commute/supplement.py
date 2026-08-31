@@ -113,6 +113,67 @@ class CommuteCandidatePoolSupplementer:
             )
         return None
 
+    def build_content_refill_query(
+        self,
+        request: TripRequest,
+        plan: TripPlan,
+        *,
+        search_index: int,
+    ) -> CommuteSupplementQuery | None:
+        """围绕景点较少日期的已有景点或酒店构造最低内容补搜请求。"""
+
+        if search_index < 0:
+            raise ValueError("search_index cannot be negative")
+
+        ordered_days = sorted(
+            enumerate(plan.days),
+            key=lambda item: (len(item[1].attractions), item[0]),
+        )
+        for day_position, day in ordered_days:
+            start_hotel, return_hotel = resolve_day_hotels(plan, day_position)
+            places = [*day.attractions, start_hotel, return_hotel]
+            anchors = []
+            seen: set[tuple[str, float, float]] = set()
+            for place in places:
+                if place is None or place.location is None:
+                    continue
+                identity = (
+                    "".join(place.name.strip().lower().split()),
+                    place.location.longitude,
+                    place.location.latitude,
+                )
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                anchors.append(place)
+            if not anchors:
+                continue
+
+            center = GeoPoint(
+                longitude=sum(item.location.longitude for item in anchors) / len(anchors),
+                latitude=sum(item.location.latitude for item in anchors) / len(anchors),
+            )
+            radius = min(
+                self.max_radius_meters,
+                self.initial_radius_meters * (2**search_index),
+            )
+            keywords = ",".join(
+                item.strip() for item in request.preferences if item and item.strip()
+            ) or "景点"
+            return CommuteSupplementQuery(
+                city=request.city,
+                keywords=keywords,
+                center=center,
+                radius_meters=radius,
+                page=1,
+                page_size=self.page_size,
+                day_index=day.day_index if day.day_index >= 0 else day_position,
+                attraction_index=len(day.attractions),
+                target_attraction_name="最低景点数量回填",
+                anchor_names=[item.name for item in anchors],
+            )
+        return None
+
     def merge(
         self,
         existing: dict[str, Any] | None,

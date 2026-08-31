@@ -56,6 +56,13 @@ _PRIVATE_SNAPSHOT_KEYS = {
     "source_version_number",
 }
 _SAFE_ERROR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,79}$")
+_SAFE_CONFLICT_DETAILS = {
+    "only completed trips can be shared": "只有已完成的行程才能分享",
+    "the trip has no complete confirmed version": "行程尚无可分享的已确认版本",
+    "the latest trip version is not confirmed": "行程尚无可分享的已确认版本",
+    "the trip has no complete confirmed snapshot": "行程尚无可分享的已确认版本",
+    "the publish operation is already in progress": "分享正在处理中，请稍后重试",
+}
 
 
 def build_shared_guide_router(
@@ -239,7 +246,8 @@ def _invoke(callback: Callable[[], _T]) -> _T:
     except SharedGuideNotFoundError as exc:
         raise HTTPException(status_code=404, detail="分享攻略不存在") from exc
     except SharedGuideConflictError as exc:
-        raise HTTPException(status_code=409, detail="分享操作冲突") from exc
+        detail = _SAFE_CONFLICT_DETAILS.get(str(exc), "分享操作冲突")
+        raise HTTPException(status_code=409, detail=detail) from exc
     except SharedGuideUnavailableError as exc:
         raise HTTPException(status_code=503, detail="分享服务暂不可用") from exc
 

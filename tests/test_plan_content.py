@@ -8,10 +8,18 @@ from app.plan_content import (
     attraction_identity,
     count_attractions,
 )
-from app.providers.amap.models import RouteEstimate, RouteEstimateResult
-from app.routing import evaluate_route_quality, plan_route_fingerprint
+from app.providers.amap.errors import AmapErrorKind, AmapProviderError
+from app.providers.amap.models import (
+    AttractionCandidate,
+    AttractionSearchResult,
+    NearbyAttractionSearchResult,
+    RouteEstimate,
+    RouteEstimateResult,
+)
+from app.routing import build_route_legs, evaluate_route_quality, plan_route_fingerprint
 from app.schemas.trip_schema import TripPlan, TripRequest
 from app.scheduling import ScheduleTimelineEvaluator
+from app.tools import build_trip_tool_registry
 from app.tools.registry import ToolRegistry
 from app.validation import TripPlanValidator
 
@@ -136,6 +144,40 @@ def empty_routes(request: TripRequest, plan: TripPlan) -> RouteEstimateResult:
         requested_legs=0,
         evaluated_legs=0,
         routes=[],
+    )
+
+
+def available_routes(
+    request: TripRequest,
+    plan: TripPlan,
+    *,
+    attractions: dict | None = None,
+    hotels: dict | None = None,
+) -> RouteEstimateResult:
+    legs = build_route_legs(
+        request,
+        plan,
+        attractions=attractions,
+        hotels=hotels,
+    )
+    return RouteEstimateResult(
+        plan_fingerprint=plan_route_fingerprint(request, plan),
+        requested_legs=len(legs),
+        evaluated_legs=len(legs),
+        routes=[
+            RouteEstimate(
+                day_index=leg.day_index,
+                leg_index=leg.leg_index,
+                leg_type=leg.leg_type,
+                date=leg.date,
+                origin_name=leg.origin.name,
+                destination_name=leg.destination.name,
+                mode=leg.mode,
+                distance_meters=1000,
+                duration_seconds=600,
+            )
+            for leg in legs
+        ],
     )
 
 
@@ -324,6 +366,54 @@ class TripPlanConsistencyRebuilderTests(unittest.TestCase):
         self.assertEqual(plan_route_fingerprint(request, rebuilt), before)
 
 
+class ContentNearbyProvider:
+    def __init__(self, responses=None, error=None):
+        self.responses = list(responses or [])
+        self.error = error
+        self.calls: list[int] = []
+
+    @staticmethod
+    def search_attractions(*, city, keywords):
+        return AttractionSearchResult(query_city=city, keywords=keywords)
+
+    @staticmethod
+    def search_hotels(*, city, keywords):
+        from app.providers.amap.models import HotelSearchResult
+
+        return HotelSearchResult(query_city=city, keywords=keywords)
+
+    @staticmethod
+    def get_weather(city):
+        from app.providers.amap.models import WeatherSearchResult
+
+        return WeatherSearchResult(query_city=city)
+
+    def search_nearby_attractions(
+        self,
+        *,
+        city,
+        keywords,
+        center,
+        radius_meters,
+        page,
+        page_size,
+    ):
+        self.calls.append(radius_meters)
+        if self.error is not None:
+            raise self.error
+        nearby = self.responses.pop(0) if self.responses else []
+        return NearbyAttractionSearchResult(
+            query_city=city,
+            keywords=keywords,
+            total_received=len(nearby),
+            candidates=nearby,
+            center=center,
+            radius_meters=radius_meters,
+            page=page,
+            page_size=page_size,
+        )
+
+
 class ContentRefillOrchestratorTests(unittest.TestCase):
     def make_ready_state(self) -> AgentState:
         request = make_request(days=1)
@@ -360,9 +450,52 @@ class ContentRefillOrchestratorTests(unittest.TestCase):
         return state
 
     @staticmethod
+    def make_minimum_two_state() -> AgentState:
+        request = make_request(days=2)
+        used = attraction("Used", 120.16, poi_id="used")
+        plan = make_plan(days=2, attractions_by_day=[[used], []])
+        routes = empty_routes(request, plan)
+        source = candidates({"name": "Used", "poi_id": "used", "longitude": 120.16})
+        schedule = ScheduleTimelineEvaluator().evaluate(request, plan, routes)
+        constraints = ConstraintEvaluator().evaluate(
+            request,
+            plan,
+            schedule,
+            attractions=source,
+            weather={"forecasts": []},
+        )
+        state = AgentState.create(
+            request,
+            minimum_total_attractions=2,
+            max_content_refill_attempts=2,
+            max_commute_supplement_searches=2,
+        )
+        state.attractions = source
+        state.weather = {"forecasts": []}
+        state.hotels = {"candidates": []}
+        state.trip_plan = plan
+        state.route_estimates = routes.model_dump(mode="json")
+        state.route_plan_fingerprint = routes.plan_fingerprint
+        state.route_quality_report = evaluate_route_quality(plan, routes)
+        state.route_quality_plan_fingerprint = routes.plan_fingerprint
+        state.route_optimization_status = "skipped"
+        state.schedule_quality_report = schedule
+        state.schedule_quality_plan_fingerprint = routes.plan_fingerprint
+        state.schedule_optimization_status = "skipped"
+        state.constraint_report = constraints
+        state.constraint_plan_fingerprint = constraint_plan_fingerprint(request, plan)
+        state.constraint_optimization_status = "skipped"
+        return state
+
+    @staticmethod
     def attach_candidate_reports(state: AgentState, *, constraint_error: bool = False) -> None:
         assert state.trip_plan is not None
-        routes = empty_routes(state.request, state.trip_plan)
+        routes = available_routes(
+            state.request,
+            state.trip_plan,
+            attractions=state.attractions,
+            hotels=state.hotels,
+        )
         state.route_estimates = routes.model_dump(mode="json")
         state.route_plan_fingerprint = routes.plan_fingerprint
         state.route_quality_report = evaluate_route_quality(state.trip_plan, routes)
@@ -387,6 +520,125 @@ class ContentRefillOrchestratorTests(unittest.TestCase):
             state.request,
             state.trip_plan,
         )
+
+    def test_missing_candidate_is_supplemented_then_refilled(self):
+        provider = ContentNearbyProvider(
+            responses=[
+                [
+                    AttractionCandidate(
+                        poi_id="dynamic-near",
+                        name="Dynamic Nearby Park",
+                        address="Near hotel",
+                        location={"longitude": 120.151, "latitude": 30.25},
+                        category="nature",
+                        rating=4.8,
+                    )
+                ]
+            ]
+        )
+        registry = build_trip_tool_registry(
+            planner_agent=object(),
+            map_provider=provider,
+        )
+        orchestrator = TripOrchestrator(
+            tool_registry=registry,
+            minimum_total_attractions=2,
+        )
+        state = self.make_minimum_two_state()
+
+        orchestrator.execute_action(state, AgentAction.REFILL_ATTRACTIONS)
+        self.assertEqual(state.content_refill_status, "supplement_needed")
+        self.assertEqual(
+            orchestrator.decide_next_action(state),
+            AgentAction.SUPPLEMENT_ATTRACTIONS,
+        )
+
+        orchestrator.execute_action(state, AgentAction.SUPPLEMENT_ATTRACTIONS)
+        self.assertEqual(state.content_refill_supplement_search_count, 1)
+        self.assertEqual(state.content_refill_supplement_history[-1].status, "completed")
+        self.assertEqual(state.content_refill_status, "not_started")
+
+        orchestrator.execute_action(state, AgentAction.REFILL_ATTRACTIONS)
+        self.assertEqual(state.content_refill_status, "candidate_pending")
+        self.attach_candidate_reports(state)
+        orchestrator.execute_action(state, AgentAction.REFILL_ATTRACTIONS)
+
+        self.assertEqual(state.content_refill_status, "completed")
+        self.assertEqual(count_attractions(state.trip_plan), 2)
+        self.assertEqual(provider.calls, [5000])
+
+    def test_empty_supplement_searches_stop_after_bounded_attempts(self):
+        provider = ContentNearbyProvider(responses=[[], []])
+        registry = build_trip_tool_registry(
+            planner_agent=object(),
+            map_provider=provider,
+        )
+        orchestrator = TripOrchestrator(
+            tool_registry=registry,
+            minimum_total_attractions=2,
+        )
+        state = self.make_minimum_two_state()
+
+        for expected_radius in (5000, 10000):
+            orchestrator.execute_action(state, AgentAction.REFILL_ATTRACTIONS)
+            self.assertEqual(state.content_refill_status, "supplement_needed")
+            self.assertEqual(state.commute_supplement_query.radius_meters, expected_radius)
+            orchestrator.execute_action(state, AgentAction.SUPPLEMENT_ATTRACTIONS)
+            self.assertEqual(state.content_refill_status, "not_started")
+
+        orchestrator.execute_action(state, AgentAction.REFILL_ATTRACTIONS)
+
+        self.assertEqual(state.content_refill_status, "skipped")
+        self.assertEqual(state.content_refill_supplement_search_count, 2)
+        self.assertEqual(
+            [item.status for item in state.content_refill_supplement_history],
+            ["empty", "empty"],
+        )
+        self.assertEqual(provider.calls, [5000, 10000])
+        self.assertEqual(count_attractions(state.trip_plan), 1)
+
+    def test_failed_supplement_searches_are_bounded_without_failing_agent(self):
+        provider = ContentNearbyProvider(
+            error=AmapProviderError(
+                "invalid nearby query",
+                kind=AmapErrorKind.INVALID_INPUT,
+                retryable=False,
+            )
+        )
+        registry = build_trip_tool_registry(
+            planner_agent=object(),
+            map_provider=provider,
+        )
+        orchestrator = TripOrchestrator(
+            tool_registry=registry,
+            minimum_total_attractions=2,
+        )
+        state = self.make_minimum_two_state()
+
+        for expected_radius in (5000, 10000):
+            orchestrator.execute_action(state, AgentAction.REFILL_ATTRACTIONS)
+            self.assertEqual(state.content_refill_status, "supplement_needed")
+            self.assertEqual(state.commute_supplement_query.radius_meters, expected_radius)
+            orchestrator.execute_action(state, AgentAction.SUPPLEMENT_ATTRACTIONS)
+            self.assertNotEqual(state.status, "failed")
+            self.assertEqual(state.content_refill_status, "not_started")
+
+        orchestrator.execute_action(state, AgentAction.REFILL_ATTRACTIONS)
+
+        self.assertEqual(state.content_refill_status, "skipped")
+        self.assertEqual(state.content_refill_supplement_search_count, 2)
+        self.assertEqual(
+            [item.status for item in state.content_refill_supplement_history],
+            ["failed", "failed"],
+        )
+        self.assertTrue(
+            all(
+                "invalid nearby query" in (item.error or "")
+                for item in state.content_refill_supplement_history
+            )
+        )
+        self.assertEqual(provider.calls, [5000, 10000])
+        self.assertEqual(count_attractions(state.trip_plan), 1)
 
     def test_refill_candidate_is_accepted_after_verified_reports(self):
         state = self.make_ready_state()

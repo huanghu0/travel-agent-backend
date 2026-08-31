@@ -167,6 +167,14 @@ def business_state_fingerprint(state: AgentState) -> str:
                 "count": state.content_refill_count,
                 "status": state.content_refill_status,
                 "candidate": state.content_refill_candidate,
+                "supplement_search_count": (
+                    state.content_refill_supplement_search_count
+                ),
+                "supplement_query": (
+                    state.commute_supplement_query
+                    if state.content_refill_status == "supplement_needed"
+                    else None
+                ),
                 "excluded_candidates": state.content_refill_excluded_identities,
             },
             "repair_count": state.repair_count,

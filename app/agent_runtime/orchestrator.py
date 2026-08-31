@@ -789,6 +789,10 @@ class TripOrchestrator:
         ):
             return AgentAction.ESTIMATE_ROUTES
 
+        # 已经生成的周边补搜请求应优先执行，避免被其他评估阶段阻塞。
+        if state.content_refill_status == "supplement_needed":
+            return AgentAction.SUPPLEMENT_ATTRACTIONS
+
         # 当前路线快照必须先完成质量评分，才能进入后续时间轴评估；
         # 该步骤也用于自动补齐旧版 SQLite 检查点缺失的路线评分。
         if (
@@ -1209,7 +1213,7 @@ class TripOrchestrator:
                 return
 
             if action is AgentAction.SUPPLEMENT_ATTRACTIONS:
-                self._handle_failed_commute_supplement(
+                self._handle_failed_attraction_supplement(
                     state,
                     tool_result.error or "Amap nearby candidate search failed",
                 )
@@ -1260,7 +1264,7 @@ class TripOrchestrator:
                 sleep_with_task_cancellation(decision.delay_seconds)
                 return
             if action is AgentAction.SUPPLEMENT_ATTRACTIONS:
-                self._handle_failed_commute_supplement(
+                self._handle_failed_attraction_supplement(
                     state,
                     invalid_result.error or "Amap nearby candidate search failed",
                 )
@@ -1707,14 +1711,39 @@ class TripOrchestrator:
             )
         )
 
-    def _handle_failed_commute_supplement(
+    def _handle_failed_attraction_supplement(
         self,
         state: AgentState,
         error: str,
     ) -> None:
-        """高德周边补搜失败时安全降级，保留当前有效行程。"""
+        """高德周边补搜失败时按调用场景有界降级，保留当前有效行程。"""
 
         query = state.commute_supplement_query
+        if state.content_refill_status == "supplement_needed":
+            if query is not None:
+                state.content_refill_supplement_search_count += 1
+                state.content_refill_supplement_history.append(
+                    CommuteSupplementRecord(
+                        attempt=state.content_refill_supplement_search_count,
+                        status="failed",
+                        reason=(
+                            "Nearby candidate search for minimum content failed; "
+                            "kept current plan"
+                        ),
+                        target_attraction_name=query.target_attraction_name,
+                        day_index=query.day_index,
+                        attraction_index=query.attraction_index,
+                        anchor_names=query.anchor_names,
+                        center_longitude=query.center.longitude,
+                        center_latitude=query.center.latitude,
+                        radius_meters=query.radius_meters,
+                        error=error,
+                    )
+                )
+            state.commute_supplement_query = None
+            state.content_refill_status = "not_started"
+            return
+
         if query is not None:
             state.commute_supplement_search_count += 1
             state.commute_supplement_history.append(
@@ -2916,12 +2945,35 @@ class TripOrchestrator:
             excluded_candidate_identities=set(state.content_refill_excluded_identities),
         )
         if candidate is None:
+            if (
+                state.content_refill_supplement_search_count
+                < state.execution_budget.max_commute_supplement_searches
+            ):
+                query = self.commute_supplementer.build_content_refill_query(
+                    state.request,
+                    state.trip_plan,
+                    search_index=state.content_refill_supplement_search_count,
+                )
+                if query is not None:
+                    state.commute_supplement_query = query
+                    state.content_refill_status = "supplement_needed"
+                    self._record_local_content_action(
+                        state,
+                        AgentAction.REFILL_ATTRACTIONS,
+                        reason,
+                        lifetime_attempt,
+                    )
+                    return
+
             state.content_refill_status = "skipped"
             state.content_refill_history.append(
                 ContentRefillRecord(
                     attempt=state.content_refill_count,
                     status="skipped",
-                    reason="No nearby schedule-feasible unused Amap candidate was found",
+                    reason=(
+                        "No schedule-feasible unused Amap candidate was found "
+                        "after bounded nearby searches"
+                    ),
                     baseline_attraction_count=count_attractions(state.trip_plan),
                     candidate_attraction_count=count_attractions(state.trip_plan),
                     baseline_fingerprint=plan_route_fingerprint(
@@ -3229,7 +3281,7 @@ class TripOrchestrator:
             return
         if action is AgentAction.SUPPLEMENT_ATTRACTIONS:
             if state.commute_supplement_query is None:
-                raise ValueError("Commute supplement query is required")
+                raise ValueError("Attraction supplement query is required")
             nearby = NearbyAttractionSearchResult.model_validate(result.data)
             query = state.commute_supplement_query
             if (
@@ -3243,8 +3295,35 @@ class TripOrchestrator:
             self._invalidate_evaluation_fingerprints(
                 state, "constraints", "validation"
             )
-            state.commute_supplement_search_count += 1
             status = "completed" if merged.added_candidates else "empty"
+            if state.content_refill_status == "supplement_needed":
+                state.content_refill_supplement_search_count += 1
+                state.content_refill_supplement_history.append(
+                    CommuteSupplementRecord(
+                        attempt=state.content_refill_supplement_search_count,
+                        status=status,
+                        reason=(
+                            "Nearby candidates merged for minimum content refill"
+                            if merged.added_candidates
+                            else "Nearby search returned no new usable refill candidates"
+                        ),
+                        target_attraction_name=query.target_attraction_name,
+                        day_index=query.day_index,
+                        attraction_index=query.attraction_index,
+                        anchor_names=query.anchor_names,
+                        center_longitude=query.center.longitude,
+                        center_latitude=query.center.latitude,
+                        radius_meters=query.radius_meters,
+                        received_candidates=merged.received_candidates,
+                        added_candidates=merged.added_candidates,
+                        final_candidates=merged.final_candidates,
+                    )
+                )
+                state.commute_supplement_query = None
+                state.content_refill_status = "not_started"
+                return
+
+            state.commute_supplement_search_count += 1
             state.commute_supplement_history.append(
                 CommuteSupplementRecord(
                     attempt=state.commute_supplement_search_count,
