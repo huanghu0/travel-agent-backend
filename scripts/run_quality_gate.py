@@ -29,6 +29,13 @@ def main() -> int:
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
         [
             sys.executable,
+            "scripts/run_rag_retrieval_evaluation.py",
+            "--fixture-dir",
+            "tests/fixtures/rag/v1",
+            "--summary-only",
+        ],
+        [
+            sys.executable,
             "scripts/run_fixed_acceptance_baseline.py",
             "--replay-dir",
             str(FIXTURE_DIR),

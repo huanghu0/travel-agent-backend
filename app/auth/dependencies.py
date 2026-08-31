@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.auth.models import User
@@ -29,6 +29,35 @@ def build_current_user_dependency(auth_service: AuthService | None) -> Callable[
             raise _unauthorized() from exc
 
     return get_current_user
+
+
+def build_optional_current_user_dependency(
+    auth_service: AuthService | None,
+) -> Callable[..., User | None]:
+    """Resolve a supplied bearer token while allowing truly anonymous reads."""
+
+    def get_optional_current_user(
+        authorization: str | None = Header(default=None),
+    ) -> User | None:
+        if authorization is None:
+            return None
+        scheme, separator, token = authorization.partition(" ")
+        if (
+            scheme.lower() != "bearer"
+            or not separator
+            or not token
+            or token.strip() != token
+            or " " in token
+        ):
+            raise _unauthorized()
+        if auth_service is None:
+            raise HTTPException(status_code=503, detail="用户认证尚未正确配置")
+        try:
+            return auth_service.resolve_token(token)
+        except InvalidAccessTokenError as exc:
+            raise _unauthorized() from exc
+
+    return get_optional_current_user
 
 
 def _unauthorized() -> HTTPException:

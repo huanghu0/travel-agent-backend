@@ -21,7 +21,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.mysql import BIGINT, DATETIME, LONGTEXT
+from sqlalchemy.dialects.mysql import BIGINT, DATETIME, LONGTEXT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -271,6 +271,96 @@ class DataMigrationRecordRow(Base):
 
     __table_args__ = (
         Index("idx_data_migration_records_batch_table", "batch_id", "table_name"),
+        MYSQL_TABLE_ARGS,
+    )
+
+
+class SharedGuideRow(Base):
+    __tablename__ = "shared_guides"
+
+    share_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    author_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False
+    )
+    source_session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_version_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    city: Mapped[str] = mapped_column(String(128), nullable=False)
+    city_normalized: Mapped[str] = mapped_column(String(128), nullable=False)
+    travel_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    transportation: Mapped[str] = mapped_column(String(64), nullable=False)
+    accommodation: Mapped[str] = mapped_column(String(128), nullable=False)
+    preferences_json: Mapped[str] = mapped_column(_long_text(), nullable=False)
+    snapshot_json: Mapped[str] = mapped_column(_long_text(), nullable=False)
+    retrieval_text: Mapped[str] = mapped_column(_long_text(), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    quality_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    quality_score: Mapped[float | None] = mapped_column(Float)
+    publication_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    index_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    retrieval_template_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    index_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    like_count: Mapped[int] = mapped_column(BIGINT(unsigned=True), nullable=False, server_default=text("0"))
+    last_index_error: Mapped[str | None] = mapped_column(_long_text())
+    indexed_at: Mapped[datetime | None] = mapped_column(_datetime_utc())
+    published_at: Mapped[datetime | None] = mapped_column(_datetime_utc())
+    created_at: Mapped[datetime] = mapped_column(_datetime_utc(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(_datetime_utc(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("author_user_id", "source_session_id", name="uq_shared_guides_author_session"),
+        Index("idx_shared_guides_author_updated", "author_user_id", "updated_at"),
+        Index("idx_shared_guides_public_published", "publication_status", "published_at"),
+        Index("idx_shared_guides_public_city_days_published", "publication_status", "city_normalized", "travel_days", "published_at"),
+        Index("idx_shared_guides_public_likes", "publication_status", "like_count", "share_id"),
+        Index("idx_shared_guides_session_author", "source_session_id", "author_user_id"),
+        Index("idx_shared_guides_index_updated", "index_status", "updated_at"),
+        MYSQL_TABLE_ARGS,
+    )
+
+
+class SharedGuideLikeRow(Base):
+    __tablename__ = "shared_guide_likes"
+
+    like_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    share_id: Mapped[str] = mapped_column(String(36), ForeignKey("shared_guides.share_id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(_datetime_utc(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("share_id", "user_id", name="uq_shared_guide_likes_share_user"),
+        MYSQL_TABLE_ARGS,
+    )
+
+
+class ShareIndexJobRow(Base):
+    __tablename__ = "share_index_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    share_id: Mapped[str] = mapped_column(String(36), ForeignKey("shared_guides.share_id", ondelete="CASCADE"), nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False)
+    index_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    next_retry_at: Mapped[datetime | None] = mapped_column(_datetime_utc())
+    lease_owner: Mapped[str | None] = mapped_column(
+        String(128).with_variant(
+            VARCHAR(128, charset="utf8mb4", collation="utf8mb4_bin"),
+            "mysql",
+        )
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(_datetime_utc())
+    last_error: Mapped[str | None] = mapped_column(_long_text())
+    created_at: Mapped[datetime] = mapped_column(_datetime_utc(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(_datetime_utc(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("share_id", "operation", "index_version", name="uq_share_index_jobs_version_operation"),
+        Index("idx_share_index_jobs_status_retry", "status", "next_retry_at"),
+        Index("idx_share_index_jobs_lease", "lease_expires_at"),
         MYSQL_TABLE_ARGS,
     )
 

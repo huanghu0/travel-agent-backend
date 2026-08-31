@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.agent_runtime import AgentAction, AgentActionError, AgentState, TripOrchestrator
+from app.agent_runtime.state import CURRENT_AGENT_STATE_VERSION
 from app.memory import SessionNotFoundError, SQLiteAgentStateStore
 from app.schemas.trip_schema import TripRequest
 from tests.auth_test_helpers import (
@@ -89,7 +90,14 @@ class PlannerAgent:
     def __init__(self, calls):
         self.calls = calls
 
-    def generate_plan(self, request, attractions, weather, hotels):
+    def generate_plan(
+        self,
+        request,
+        attractions,
+        weather,
+        hotels,
+        rag_context=None,
+    ):
         self.calls.append(AgentAction.GENERATE_PLAN)
         return make_plan()
 
@@ -338,6 +346,17 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         self.assertEqual(loaded.execution_budget.minimum_total_attractions, 0)
         self.assertEqual(loaded.content_refill_status, "not_started")
         self.assertIsNone(loaded.plan_consistency_fingerprint)
+
+    def test_version_16_checkpoint_without_rag_context_still_loads(self):
+        payload = AgentState.create(make_request()).model_dump(mode="json")
+        self.assertEqual(CURRENT_AGENT_STATE_VERSION, 17)
+        payload["state_version"] = 16
+        payload.pop("rag_context")
+
+        loaded = AgentState.model_validate(payload)
+
+        self.assertEqual(loaded.state_version, 16)
+        self.assertIsNone(loaded.rag_context)
 
     def test_missing_session_raises_specific_error(self):
         with self.assertRaises(SessionNotFoundError):

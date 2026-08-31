@@ -1,0 +1,45 @@
+# Version control and agent metadata
+.git/
+.gitattributes
+.agents/
+.codex/
+.superpowers/
+
+# Runtime credentials and local configuration
+.env*
+infra.env
+backend.env
+docker-compose*.yml
+compose*.yaml
+
+# Python environments and generated files
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+
+# Tests, coverage, documentation, and local runtime data
+tests/
+docs/
+.pytest_cache/
+.coverage
+htmlcov/
+data/
+*.db
+*.log
+logs/
+e2e-*.json
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

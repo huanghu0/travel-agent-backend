@@ -25,6 +25,9 @@ from app.providers.amap.models import (
     RouteLegRequest,
     WeatherSearchResult,
 )
+from app.rag.interfaces import RagRetriever
+from app.rag.models import RagContext
+from app.rag.retrieval import NoOpRagRetriever
 from app.schemas.trip_schema import TripPlan, TripRequest
 from app.tools.models import ToolErrorType
 from app.tools.registry import CallInjector, ToolDefinition, ToolRegistry, ToolResultError
@@ -93,10 +96,16 @@ class EstimateRoutesInput(BaseModel):
 
 
 class GeneratePlanInput(BaseModel):
+    session_id: str = Field(min_length=1)
     request: TripRequest
     attractions: dict[str, Any]
     weather: dict[str, Any]
     hotels: dict[str, Any]
+
+
+class GeneratePlanResult(BaseModel):
+    trip_plan: TripPlan
+    rag_context: RagContext
 
 
 class RepairPlanInput(BaseModel):
@@ -175,6 +184,7 @@ def build_trip_tool_registry(
     weather_agent: Any | None = None,
     hotel_agent: Any | None = None,
     call_injector: CallInjector | None = None,
+    rag_retriever: RagRetriever | None = None,
 ) -> ToolRegistry:
     """构建固定工具白名单。
 
@@ -183,6 +193,9 @@ def build_trip_tool_registry(
     """
 
     provider = _standardized_provider(map_provider, route_cache, restaurant_cache)
+    retriever = (
+        rag_retriever if rag_retriever is not None else NoOpRagRetriever()
+    )
 
     # 步骤 1：选择事实查询处理器。默认走标准化 Provider；显式旧 Agent 保留原链路。
     if attraction_agent is None:
@@ -355,6 +368,31 @@ def build_trip_tool_registry(
             routes=routes,
         )
 
+    def generate_plan(value: GeneratePlanInput) -> GeneratePlanResult:
+        rag_context = retriever.retrieve(
+            value.request,
+            exclude_session_id=value.session_id,
+        )
+        if rag_retriever is None:
+            plan = planner_agent.generate_plan(
+                value.request,
+                value.attractions,
+                value.weather,
+                value.hotels,
+            )
+        else:
+            plan = planner_agent.generate_plan(
+                value.request,
+                value.attractions,
+                value.weather,
+                value.hotels,
+                rag_context=rag_context,
+            )
+        return GeneratePlanResult(
+            trip_plan=TripPlan.model_validate(plan),
+            rag_context=rag_context,
+        )
+
     # 步骤 4：注册固定工具白名单和稳定输入/输出 Schema。
     # 验收测试可注入确定性故障；生产环境默认不传，工具调用路径不受影响。
     registry = ToolRegistry(call_injector=call_injector)
@@ -465,13 +503,8 @@ def build_trip_tool_registry(
             name="generate_plan",
             description="根据请求、景点、天气和酒店信息生成结构化旅行计划",
             input_model=GeneratePlanInput,
-            handler=lambda value: planner_agent.generate_plan(
-                value.request,
-                value.attractions,
-                value.weather,
-                value.hotels,
-            ),
-            output_model=TripPlan,
+            handler=generate_plan,
+            output_model=GeneratePlanResult,
             invalid_output_retryable=True,
             llm_call_cost=1,
         )

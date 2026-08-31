@@ -1,0 +1,9 @@
+{
+  "fixture_version": "rag-retrieval-v1",
+  "corpus_count": 17,
+  "query_count": 15,
+  "top_k": 3,
+  "min_recall_at_3": 1.0,
+  "min_ndcg_at_3": 0.95,
+  "source": "synthetic-offline-frozen-scores"
+}

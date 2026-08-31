@@ -17,6 +17,7 @@ from app.persistence.interfaces import (
     TripTaskStore,
     TripVersionStore,
 )
+from app.sharing.store import SharedGuideStore
 
 if TYPE_CHECKING:
     from app.auth.service import UserStore
@@ -32,6 +33,7 @@ class PersistenceStores:
     route_cache: RouteCacheStore | None
     restaurant_cache: RestaurantCacheStore | None
     user_store: UserStore | None = None
+    shared_guide_store: SharedGuideStore | None = None
 
 
 def create_persistence_stores(
@@ -64,6 +66,7 @@ def create_persistence_stores(
                 SQLiteRestaurantCache(database_path) if restaurant_cache_enabled else None
             ),
             user_store=None,
+            shared_guide_store=None,
         )
 
     if normalized_backend == "mysql":
@@ -73,6 +76,7 @@ def create_persistence_stores(
         from app.persistence.mysql_trip_task_store import MySQLTripTaskStore
         from app.persistence.mysql_trip_version_store import MySQLTripVersionStore
         from app.auth.store import MySQLUserStore
+        from app.sharing.mysql_store import MySQLSharedGuideStore
 
         engine = mysql_engine
         if engine is None:
@@ -88,6 +92,7 @@ def create_persistence_stores(
                 MySQLRestaurantCache(engine) if restaurant_cache_enabled else None
             ),
             user_store=MySQLUserStore(engine),
+            shared_guide_store=MySQLSharedGuideStore(engine),
         )
 
     raise UnsupportedDatabaseBackendError(

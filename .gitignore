@@ -45,3 +45,15 @@ Thumbs.db
 
 # --- Agent运行时记忆 ---
 data/
+
+# --- Git worktrees ---
+.worktrees/
+
+# --- Superpowers progress scratch ---
+.superpowers/
+
+# --- Server-only deployment configuration ---
+compose.yaml
+docker-compose*.yml
+infra.env
+backend.env

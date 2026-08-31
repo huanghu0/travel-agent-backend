@@ -28,6 +28,9 @@ EXPECTED_TABLES = {
     "trip_task_events",
     "data_migration_batches",
     "data_migration_records",
+    "shared_guides",
+    "shared_guide_likes",
+    "share_index_jobs",
 }
 
 
@@ -175,6 +178,36 @@ class MySQLMetadataTests(unittest.TestCase):
         self.assertEqual(
             foreign_keys[0].target_fullname,
             "trip_planning_tasks.task_id",
+        )
+
+    def test_shared_guide_ddl_has_required_constraints_and_cascade_foreign_keys(self):
+        statements = {
+            table_name: str(CreateTable(table).compile(dialect=mysql.dialect())).upper()
+            for table_name, table in Base.metadata.tables.items()
+        }
+        shared_guides = statements["shared_guides"]
+        likes = statements["shared_guide_likes"]
+        jobs = statements["share_index_jobs"]
+
+        self.assertIn("UQ_SHARED_GUIDES_AUTHOR_SESSION", shared_guides)
+        self.assertIn(
+            "FOREIGN KEY(AUTHOR_USER_ID) REFERENCES USERS (USER_ID) ON DELETE CASCADE",
+            shared_guides,
+        )
+        self.assertNotIn("SOURCE_SESSION_ID) REFERENCES", shared_guides)
+        self.assertIn("BIGINT UNSIGNED", shared_guides)
+        self.assertIn("DEFAULT 0", shared_guides)
+        self.assertIn("UQ_SHARED_GUIDE_LIKES_SHARE_USER", likes)
+        self.assertEqual(likes.count("ON DELETE CASCADE"), 2)
+        self.assertIn("UQ_SHARE_INDEX_JOBS_VERSION_OPERATION", jobs)
+        self.assertIn("ON DELETE CASCADE", jobs)
+        lease_owner = Base.metadata.tables["share_index_jobs"].c.lease_owner
+        mysql_lease_owner = lease_owner.type.dialect_impl(mysql.dialect())
+        self.assertEqual(mysql_lease_owner.charset, "utf8mb4")
+        self.assertEqual(mysql_lease_owner.collation, "utf8mb4_bin")
+        self.assertIn(
+            "LEASE_OWNER VARCHAR(128) CHARACTER SET UTF8MB4 COLLATE UTF8MB4_BIN",
+            jobs,
         )
 
     def test_schema_validator_rejects_non_mysql_engine(self):
