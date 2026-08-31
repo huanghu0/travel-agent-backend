@@ -351,6 +351,9 @@ class TripOrchestrator:
         self.schedule_optimizer = schedule_optimizer or DeterministicScheduleOptimizer(
             evaluator=self.schedule_evaluator,
             max_candidates=schedule_optimization_max_candidates,
+            min_move_improvement_percent=(
+                schedule_optimization_min_improvement_percent
+            ),
         )
         self.max_constraint_optimization_attempts = (
             max_constraint_optimization_attempts
@@ -3443,6 +3446,9 @@ class TripOrchestrator:
                 state,
                 reset_optimization_count=False,
             )
+            # LLM 已经生成了新的行程结构。允许新计划重新获得一次日程优化
+            # 机会，但仍由 repair_count 和单计划优化上限保证整体执行有界。
+            state.schedule_optimization_count = 0
             state.repair_count += 1
             return
         raise ValueError(f"unsupported action result: {action.value}")

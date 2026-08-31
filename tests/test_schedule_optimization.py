@@ -274,6 +274,33 @@ class DeterministicScheduleOptimizerTests(unittest.TestCase):
         self.assertEqual(moved.visit_duration, source.visit_duration)
         self.assertLessEqual(candidate.considered_candidates, 6)
 
+    def test_optimizer_skips_low_value_move_and_reduces_overload(self):
+        request = make_request()
+        plan = make_plan()
+        evaluator = ScheduleTimelineEvaluator()
+        report = evaluator.evaluate(request, plan, make_routes(plan))
+        move = DeterministicScheduleOptimizer(
+            evaluator=evaluator,
+            max_candidates=6,
+        ).optimize(request, plan, report)
+
+        self.assertIsNotNone(move)
+        assert move is not None
+        self.assertEqual(move.strategy, "move_last_attraction_to_lower_cost_day")
+
+        candidate = DeterministicScheduleOptimizer(
+            evaluator=evaluator,
+            max_candidates=6,
+            min_move_improvement_percent=(
+                move.approximate_improvement_percent + 0.01
+            ),
+        ).optimize(request, plan, report)
+
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        self.assertEqual(candidate.strategy, "remove_attractions_from_overloaded_days")
+        self.assertTrue(candidate.removed_attraction_names)
+
     def test_optimizer_is_deterministic(self):
         request = make_request()
         plan = make_plan()
@@ -372,6 +399,22 @@ class ScheduleOrchestratorTests(unittest.TestCase):
             orchestrator.decide_next_action(state),
             AgentAction.ESTIMATE_ROUTES,
         )
+
+    def test_repaired_plan_gets_fresh_schedule_optimization_attempt(self):
+        state = self.make_state()
+        state.schedule_optimization_count = 1
+        state.schedule_optimization_status = "completed"
+        orchestrator = TripOrchestrator(tool_registry=ToolRegistry())
+
+        orchestrator._apply_tool_result(
+            state,
+            AgentAction.REPAIR_PLAN,
+            ActionResult(tool_name="repair_plan", success=True, data=make_plan()),
+        )
+
+        self.assertEqual(state.schedule_optimization_count, 0)
+        self.assertEqual(state.schedule_optimization_status, "not_started")
+        self.assertEqual(state.repair_count, 1)
 
     def test_candidate_real_improvement_is_accepted(self):
         state = self.make_state()

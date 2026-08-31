@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
@@ -1116,6 +1117,29 @@ def delete_trip_session(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+_RESTARTABLE_AGENT_STATUSES: frozenset[AgentStatus] = frozenset(
+    {
+        "failed",
+        "budget_exhausted",
+        "max_steps_reached",
+        "convergence_stopped",
+    }
+)
+
+
+def _trip_session_requires_restart(state: AgentState) -> bool:
+    """判断恢复请求是否必须创建拥有全新生命周期预算的会话。"""
+
+    if state.status in _RESTARTABLE_AGENT_STATUSES:
+        return True
+    if state.status not in {"pending", "running"} or state.deadline_at is None:
+        return False
+    deadline = state.deadline_at
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= deadline.astimezone(timezone.utc)
+
+
 @app.post(
     "/api/trip/sessions/{session_id}/resume",
     summary="恢复旅行规划会话",
@@ -1125,18 +1149,31 @@ def resume_trip_session(
     session_id: str,
     current_user: User = Depends(current_user_dependency),
 ):
-    """从最近检查点继续执行，不重复已经成功完成的动作。"""
+    """继续有效检查点；终止或超时会话则使用原请求重新规划。"""
 
     try:
         # 步骤 1：加载最近检查点。
         state = agent_state_store.get_state(session_id, user_id=current_user.user_id)
-        # 步骤 2：编排器根据已存在的数据决定下一动作，不重复已成功的步骤。
-        resumed = trip_orchestrator.resume(state)
-        # 恢复执行可能推进时间轴、路线和质量状态，删除旧读模型供下次重建。
+        # 失败、预算耗尽或截止时间已过的检查点没有可用恢复空间。
+        # 保留旧会话用于审计，并创建新会话获得独立的步骤、调用和时间预算。
+        if _trip_session_requires_restart(state):
+            resumed = trip_orchestrator.run(
+                state.request,
+                user_id=current_user.user_id,
+            )
+        else:
+            # 尚有预算的未完成会话从已有数据继续，不重复已成功的步骤。
+            resumed = trip_orchestrator.resume(state)
+        # 执行可能推进旧会话，也可能返回新的 session_id；两边缓存都需失效。
         read_model_cache.delete_execution_view(
             session_id,
             user_id=current_user.user_id,
         )
+        if resumed.session_id != session_id:
+            read_model_cache.delete_execution_view(
+                resumed.session_id,
+                user_id=current_user.user_id,
+            )
         return resumed
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

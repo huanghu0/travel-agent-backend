@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -409,6 +410,73 @@ class SQLiteAgentStateStoreTests(unittest.TestCase):
         self.assertEqual(resumed.attempts_by_action["search_attractions"], 3)
         self.assertEqual(resumed.action_history[2].attempt, 3)
         self.assertTrue(resumed.action_history[2].success)
+
+    def test_resume_endpoint_restarts_terminal_session_with_new_budget(self):
+        import main
+
+        failed = AgentState.create(
+            make_request(),
+            session_id="failed-api-session",
+            user_id=TEST_USER.user_id,
+        )
+        failed.mark_budget_exhausted("智能体达到最大执行时间 600 秒")
+        self.store.save_state(failed)
+
+        class RestartingOrchestrator:
+            def __init__(self):
+                self.run_calls = 0
+                self.resume_calls = 0
+
+            def run(self, request, **kwargs):
+                self.run_calls += 1
+                restarted = AgentState.create(
+                    request,
+                    session_id="restarted-api-session",
+                    user_id=kwargs.get("user_id"),
+                )
+                restarted.status = "completed"
+                restarted.finished = True
+                return restarted
+
+            def resume(self, state):
+                self.resume_calls += 1
+                return state
+
+        restarting = RestartingOrchestrator()
+        original_store = main.agent_state_store
+        original_orchestrator = main.trip_orchestrator
+        main.agent_state_store = self.store
+        main.trip_orchestrator = restarting
+        install_main_auth_override(main)
+        try:
+            response = TestClient(main.app).post(
+                "/api/trip/sessions/failed-api-session/resume"
+            )
+        finally:
+            remove_main_auth_override(main)
+            main.agent_state_store = original_store
+            main.trip_orchestrator = original_orchestrator
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["session_id"], "restarted-api-session")
+        self.assertEqual(restarting.run_calls, 1)
+        self.assertEqual(restarting.resume_calls, 0)
+        self.assertEqual(
+            self.store.get_state("failed-api-session").status,
+            "budget_exhausted",
+        )
+
+    def test_expired_running_session_requires_restart(self):
+        import main
+
+        state = AgentState.create(make_request())
+        state.status = "running"
+        state.deadline_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        self.assertTrue(main._trip_session_requires_restart(state))
+
+        state.deadline_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+        self.assertFalse(main._trip_session_requires_restart(state))
 
     def test_session_http_endpoints_support_query_and_idempotent_resume(self):
         import main

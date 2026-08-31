@@ -20,11 +20,15 @@ class DeterministicScheduleOptimizer:
         *,
         evaluator: ScheduleTimelineEvaluator | None = None,
         max_candidates: int = 6,
+        min_move_improvement_percent: float = 0.0,
     ):
         if max_candidates < 1:
             raise ValueError("max_candidates must be at least 1")
+        if min_move_improvement_percent < 0:
+            raise ValueError("min_move_improvement_percent cannot be negative")
         self.evaluator = evaluator or ScheduleTimelineEvaluator()
         self.max_candidates = max_candidates
+        self.min_move_improvement_percent = min_move_improvement_percent
 
     def optimize(
         self,
@@ -93,6 +97,14 @@ class DeterministicScheduleOptimizer:
                 considered += 1
                 candidate_cost = candidate_report.optimization_cost
                 if candidate_cost + 0.01 >= baseline_cost:
+                    continue
+                improvement_percent = self._improvement_percent(
+                    baseline_cost,
+                    candidate_cost,
+                )
+                # 编排器会使用相同阈值复验真实路线。近似收益不足的移动
+                # 不应提前占用唯一一次优化预算，继续尝试确定性的负载削减。
+                if improvement_percent < self.min_move_improvement_percent:
                     continue
                 comparison = (
                     candidate_cost,
